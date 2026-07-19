@@ -682,13 +682,151 @@
 #### 5. สถานะปัจจุบัน (จบเซสชัน)
 - ✅ Local, GitHub, Marimo sync กันแล้ว — `git status` สะอาดทั้ง 2 ฝั่ง, commit `8f49d34`
 - ✅ Path ทุกไฟล์ชี้ไป `/workspace/AggNet/...` ถูกต้อง
-- ⏳ ยังไม่ได้ run training จริงบนแพลตฟอร์มใหม่ — รอทดสอบรันครั้งแรก
-- ⏳ ยังไม่ยืนยันว่า `data/dataset3/` มีครบ 147 samples (ต้องเช็คว่า `Dataset3.zip` ที่อัปโหลดแยกจำเป็นต้องแตกเพิ่มไหม หรือซ้ำกับที่มีใน `AggNet.zip` แล้ว)
-- ⚠️ GitHub แจ้งเตือนรหัสผ่านบัญชี `Suppachay` อยู่ในลิสต์รหัสผ่านที่ใช้ซ้ำเยอะ — ต้องเปลี่ยนก่อน 18 ส.ค. 2026 (ที่ github.com/settings/security)
+- ✅ รัน training จริงบนแพลตฟอร์มใหม่แล้ว (ดู Run 09 ด้านล่าง) — พบว่า user เก็บข้อมูลเพิ่มเป็น 237 samples ระหว่างทาง (ไม่ใช่แค่ 147 ที่คาดไว้ตอนแรก)
+- ⚠️ GitHub แจ้งเตือนรหัสผ่านบัญชี `Suppachay` อยู่ในลิสต์รหัสผ่านที่ใช้ซ้ำเยอะ — ต้องเปลี่ยนก่อน 18 ส.ค. 2026 (ที่ github.com/settings/security) **ยังไม่ได้เปลี่ยน**
+
+---
+
+#### 6. Dataset โต 145 → 237 samples + สร้าง `splits.json` ใหม่
+
+ระหว่างย้ายแพลตฟอร์ม user เก็บข้อมูลเพิ่มเอง ทำให้ `data/dataset3/labels.csv` มี **237 samples ดิบ** (238 แถวรวม header) — มากกว่า 145 samples เดิมของ Session 3 ค่อนข้างมาก
+
+| ประเภท | จำนวนดิบ | หลัง dedup |
+|---|---|---|
+| Aggregate 3_4inch | 166 | 164 |
+| Aggregate 3_8inch | 70 | 70 |
+| Aggregate 1 inch | 1 | 1 |
+| **รวม** | 237 | **235** |
+
+`splits.json` เดิม (สำหรับ 145 samples) **หายไปพร้อมกับเซิร์ฟเวอร์เก่า** ไม่มีอยู่ทั้งบน local และ Marimo และไม่มีสคริปต์สร้าง split เก็บไว้ใน repo (ทำแบบ ad-hoc บนเซิร์ฟเวอร์เดิม ไม่เคยบันทึกเป็นไฟล์)
+
+**สร้างใหม่:** `code/make_splits.py` — source-aware split โดย**แบ่งสัดส่วน 70/20/10 ภายในแต่ละ Source group** (ไม่ใช่ assign ทั้ง group ให้ split เดียวแบบ atomic) เพราะ Model B มีแค่ 4 sources ครอบคลุม 70 samples — ถ้า assign ทั้ง group จะหยาบเกินไป บาง split ได้ 0 sample เลย (ลองแล้วพบปัญหานี้จริงก่อนเปลี่ยนวิธี) กลุ่มที่มี ≤2 samples ไปอยู่ train ทั้งหมด (แบ่งไม่ได้อยู่แล้ว)
+
+**ผลลัพธ์:**
+| Model | Train | Val | Test |
+|---|---|---|---|
+| A (3_4inch) | 126 | 27 | 11 |
+| B (3_8inch) | 50 | 14 | 6 |
+| C (1inch) | 1 | 0 | 0 |
+
+`splits.json` เพิ่ม exception ใน `.gitignore` ให้ track ผ่าน git ด้วย (เป็นไฟล์เล็ก จำเป็นต่อการ reproduce) — ต่างจาก `data/` ที่เหลือซึ่งยัง ignore ทั้งหมด
+
+---
+
+#### 7. Marimo/subprocess gotcha: background process ค้าง (hang) ตลอดกาล
+
+ตอนสั่ง train แบบ background ครั้งแรกด้วย `subprocess.run([...], capture_output=True)` + `nohup ... &` — **cell ค้างไม่จบเลย** แม้ training จริงจะเริ่มทำงานไปแล้วก็ตาม
+
+**สาเหตุ:** `capture_output=True` เปิด pipe ดัก stdout/stderr ของ `bash -lc` — pipe จะไม่ปิด (EOF) จนกว่า **ทุก process ที่ inherit file descriptor นั้น** จะปิดหมด แม้ backgrounded process จะ redirect ตัวเองไปไฟล์แล้ว ก็ยังมีโอกาสค้าง fd เดิมไว้ ทำให้ `subprocess.run()`/`.communicate()` รอ EOF ตลอดกาล — เป็น gotcha ที่รู้จักกันดีของ Python `subprocess` + background job ไม่เกี่ยวกับ Marimo โดยตรง
+
+**วิธีแก้:** ฟังก์ชันแยกสำหรับ launch background process โดยเฉพาะ ไม่ใช้ `capture_output=True`:
+```python
+def launch_bg(cmd):
+    subprocess.run(["bash", "-lc", cmd],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL)
+```
+ใช้คู่กับ `run()` (helper เดิมที่ใช้ `capture_output=True` ได้ปกติสำหรับคำสั่งที่ไม่ได้ background เช่น `tail`, `grep`, `ps aux`)
+
+**บทเรียนเพิ่มเติม:** ถ้า cell ที่ launch ค้างอยู่ ให้กด **Stop/Interrupt cell นั้นตรงๆ** — ตัว process จริงที่ `nohup` ไปแล้วจะไม่ตายตาม เพราะ detach จาก cell ไปแล้ว (ยืนยันแล้วว่า reconnect/restart kernel ของ Marimo ก็ไม่กระทบ process ที่ nohup ไว้เช่นกัน — คนละ process กับตัว notebook kernel)
+
+---
+
+### Run 09 — 2026-07-19 (Run แรกบน RAILAB Marimo, 237 samples, ±10% tolerance)
+
+**Script:** `/workspace/AggNet/code/aggnet_dataset3.py` (โค้ดเดิมจาก Run 08 ไม่เปลี่ยน architecture)
+**Dataset:** 237 samples ดิบ / 235 หลัง dedup (`data/dataset3`, `splits.json` สร้างใหม่ตามข้อ 6)
+**Hardware:** NVIDIA A100-SXM4-80GB (RAILAB Marimo GPU session)
+
+⚠️ **หมายเหตุสำคัญ:** รอบนี้ script print ค่า Accuracy ที่ **tolerance ±10%** (Run 08 และก่อนหน้าใช้ ±5%) — **MAE และ R² เทียบกับ Run 08 ได้ตรงๆ แต่ Accuracy เทียบกันไม่ได้โดยตรง** (ต้องเช็คใน code ว่า threshold ถูกเปลี่ยนตอนไหน/ทำไม ยังไม่ได้ตรวจ)
+
+#### Model A — Aggregate 3_4inch (train 126 / val 27 / test 11)
+**Stopped at:** epoch 140 (early stopping) · **Best Val Loss:** 0.00767
+
+| Metric | Run 08 (145s) | **Run 09 (237s)** | เทียบกันได้ไหม |
+|---|---|---|---|
+| Val MAE | 6.97% | **5.49%** | ✅ ตรงกัน — ดีขึ้น |
+| Val R² | -0.430 | **0.048** | ✅ ตรงกัน — ข้าม 0 ครั้งแรก |
+| Val Per-sieve Acc | 54.0% (±5%) | 75.9% (±10%) | ❌ tolerance ต่างกัน |
+| Val Sample Acc | 9.5% (±5%) | 22.2% (±10%) | ❌ tolerance ต่างกัน |
+| Test MAE | 7.61% | 7.58% | ✅ ตรงกัน — ทรงตัว |
+| Test R² | -0.435 | **-0.019** | ✅ ตรงกัน — ดีขึ้นมาก |
+
+**Per-sieve (Val):**
+| Sieve | MAE | R² | Acc(±10%) |
+|---|---|---|---|
+| 3/4" | 5.81% | 0.068 | 85.2% |
+| 1/2" | 12.46% | 0.111 | 29.6% |
+| 3/8" | 11.11% | -0.035 | 44.4% |
+| #4 | 2.05% | — | 96.3% |
+| #8 | 1.01% | — | 100.0% |
+| Pan | 0.47% | — | 100.0% |
+
+**Per-sieve (Test):**
+| Sieve | MAE | R² | Acc(±10%) |
+|---|---|---|---|
+| 3/4" | 11.05% | -0.281 | 63.6% |
+| 1/2" | 19.14% | 0.011 | 9.1% |
+| 3/8" | 13.06% | 0.213 | 27.3% |
+| #4 | 1.24% | — | 100.0% |
+| #8 | 0.56% | — | 100.0% |
+| Pan | 0.40% | — | 100.0% |
+
+#### Model B — Aggregate 3_8inch (train 50 / val 14 / test 6)
+**Stopped at:** epoch 314 (early stopping) · **Best Val Loss:** 0.00141
+
+| Metric | Run 08 (40s) | **Run 09 (70s)** |
+|---|---|---|
+| Val MAE | 2.67% | **2.37%** |
+| Val R² | ไม่ระบุ | 0.323 |
+| Test MAE | 4.09% | **2.31%** — ดีขึ้นชัดเจน |
+| Test R² | ไม่ระบุ | -1.0 *(metric นี้คำนวณเฉพาะ 3/4"~3/8" ซึ่ง Model B ไม่ predict — ค่า -1.0 ไม่มีความหมาย ไม่ใช่สัญญาณแย่จริง)* |
+
+**Per-sieve (Val):** #4 4.77% (R²0.293, 92.9%) · #8 1.49% (R²0.353, 100%) · Pan 0.84%
+**Per-sieve (Test):** #4 4.80% (83.3%) · #8 1.22% (100%) · Pan 0.91%
+
+#### Model C — Aggregate 1 inch
+Skip อัตโนมัติเหมือนเดิม (train=1 sample < 3)
+
+**สรุป:** ข้อมูลที่เพิ่มขึ้น (145→237) ช่วยทั้ง MAE และ R² ดีขึ้นในทุกจุดที่เทียบกันได้ตรงๆ — Model A เริ่มมี R² เป็นบวกใน val set เป็นครั้งแรก **แต่จุดยากยังเป็นจุดเดิม: 1/2" (MAE 12.46%) และ 3/8" (MAE 11.11%)** ไม่ขยับมากนัก แปลว่าข้อมูลที่เพิ่มมายังไม่ได้ตรงจุดที่ขาด (ต้องเพิ่ม sample ที่ 1/2"/3/8" ค่าเยอะ/แปลกโดยเฉพาะ)
+
+**ขั้นตอนถัดไปที่แนะนำ:**
+- [ ] เช็คว่าทำไม accuracy tolerance เปลี่ยนจาก ±5% เป็น ±10% ในโค้ด (ตั้งใจเปลี่ยนหรือ default เดิมอยู่แล้ว) — ถ้าจะเทียบผลในอนาคตต้องรู้ค่าที่ใช้แน่ชัด
+- [ ] เพิ่มข้อมูล 1/2" และ 3/8" ที่ variance สูงโดยเฉพาะ (ยังเป็นจุดอ่อนต่อเนื่องมาตั้งแต่ Session 3)
+
+---
+
+#### 8. Deploy Web App (`app_aggnet_qc.py`) บนแพลตฟอร์มใหม่
+
+**ปัญหาที่เจอ:**
+| ปัญหา | วิธีแก้ |
+|---|---|
+| `ModuleNotFoundError: No module named 'flask'` | `pip install flask reportlab` (environment ใหม่ไม่มี 2 package นี้ — ได้ flask 3.1.3, reportlab 5.0.0) |
+| ไม่มีทาง expose port 5000 ออกสู่ภายนอกจาก RAILAB UI | เช็ค settings ทุกจุดของ Marimo (Display, Packages, Runtime, AI, Labs) ไม่มี Network/Ports section เลย — สรุปว่าแพลตฟอร์มนี้ไม่มี built-in port forwarding |
+
+**ทางแก้ที่ใช้ได้: Cloudflare Tunnel (cloudflared)** — ดาวน์โหลด binary ทางการจาก GitHub release, รัน `cloudflared tunnel --url http://localhost:5000` แบบ background (ด้วย `launch_bg()`) ได้ public HTTPS URL แบบไม่ต้องสมัครบัญชี (`*.trycloudflare.com`)
+
+⚠️ **ข้อจำกัดของ quick tunnel:** URL เป็นแบบชั่วคราว เปลี่ยนทุกครั้งที่รัน `cloudflared` ใหม่ ไม่มี auth ใดๆ (public เต็มที่) และหายไปทันทีถ้า process/session ถูกปิด — **เหมาะสำหรับ demo/ทดสอบเท่านั้น ไม่เหมาะ production**
+
+**สถานะ:** App โหลด Run 09 models (`aggnet_34_best.pth`, `aggnet_38_best.pth`) ผ่าน CUDA สำเร็จ, ตอบ HTTP 200 — ยังไม่ได้ทดสอบ upload ภาพจริงผ่าน browser หรือเช็คว่า PDF report generate ได้ปกติไหม (Session 3 เคยมีปัญหา ReportLab กับ OpenSSL บนเซิร์ฟเวอร์เก่า ต้อง patch — ยังไม่ยืนยันว่า reportlab 5.0.0 บน environment ใหม่นี้มีปัญหาเดิมไหม)
+
+#### 9. แผน Production Deployment (คุยแล้ว ยังไม่ได้ทำ)
+
+Setup ปัจจุบัน (Flask dev server + cloudflared quick tunnel) เป็น prototype เท่านั้น ไม่เหมาะให้ลูกค้าใช้จริง — สรุปคำแนะนำที่คุยไว้:
+
+| หัวข้อ | คำแนะนำ |
+|---|---|
+| Hosting | Fly.io / Google Cloud Run / Render — deploy จาก GitHub repo (`Suppachay/aggnet-qc`) ตรงๆ ผ่าน Dockerfile, HTTPS ฟรี, จ่ายตาม usage |
+| GPU | **ต้องการแค่ตอน train เท่านั้น** — inference (EfficientNet-B0 forward pass 1 ภาพ) เร็วพอบน CPU (<1 วิ) ไม่ต้องมี GPU serving ตลอดเวลา |
+| Auth | เริ่มจาก **HTTP Basic Auth ที่ nginx/reverse proxy** (ง่ายสุด ไม่ต้องแก้โค้ด) — ถ้าต้องแยกบัญชีลูกค้า/audit log ค่อยอัปเกรดเป็น Flask-Login ทีหลัง |
 
 **ขั้นตอนถัดไป:**
-- [ ] เช็ค/ยืนยันความครบถ้วนของ `data/dataset3/` บน Marimo
-- [ ] รัน `aggnet_dataset3.py` ครั้งแรกบนแพลตฟอร์มใหม่ ยืนยันว่า path ใหม่ทำงานถูกต้อง (Run 09)
-- [ ] เปลี่ยนรหัสผ่าน GitHub
+- [ ] ตัดสินใจ hosting platform แล้วเขียน Dockerfile + deploy config
+- [ ] ตั้ง Basic Auth ก่อนเปิดให้ใครใช้จริง
+- [ ] ทดสอบ upload ภาพจริงผ่าน web app (ยังไม่ทำใน session นี้)
+- [ ] เช็คว่า tolerance ±10% ใน Run 09 ตั้งใจเปลี่ยนหรือเปล่า
+- [ ] เพิ่มข้อมูล 1/2"/3/8" ที่ variance สูงต่อ
+- [ ] เปลี่ยนรหัสผ่าน GitHub (ค้างมาตั้งแต่ก่อนหน้า)
 
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->

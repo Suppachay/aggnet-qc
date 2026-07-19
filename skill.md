@@ -117,17 +117,20 @@ CBAM (Channel Attention + Spatial Attention)   ← NEW: โฟกัสบริ
 - ตรวจ label ซ้ำทุก sieve column ภายใน agg_type เดียวกัน
 - keep first occurrence, drop rest พร้อม warning
 - **Dataset3 (2026-06-25):** ตัดออก 2 samples (093=051, 132=049) → เหลือ **145 samples**
+- **Dataset3 (2026-07-19):** เก็บข้อมูลเพิ่มระหว่างย้ายแพลตฟอร์ม 237 samples ดิบ → เหลือ **235 samples** หลัง clean — ดูตาราง Dataset ด้านล่าง (อัปเดตแล้ว)
 
 ---
 
-## Dataset (2026-06-25)
+## Dataset (อัปเดตล่าสุด 2026-07-19)
+
+> เดิม 145 samples (2026-06-25) → เพิ่มเป็น **237 ดิบ / 235 หลัง clean** — `splits.json` สร้างใหม่ด้วย `code/make_splits.py` (source-aware, แบ่งสัดส่วนภายในแต่ละ Source แทนการ assign ทั้ง group — ดู `experiment_log.md` Session 4 ข้อ 6 สำหรับเหตุผล)
 
 | ประเภท | จำนวน (หลัง clean) | Split (train/val/test) |
 |--------|-------------------|----------------------|
-| Aggregate 3_4inch | **104 samples** | 73 / 21 / 10 |
-| Aggregate 3_8inch | **40 samples** | 28 / 8 / 4 |
-| Aggregate 1 inch  | **1 sample** | รอข้อมูลเพิ่ม |
-| **รวม** | **145 samples** | |
+| Aggregate 3_4inch | **164 samples** | 126 / 27 / 11 |
+| Aggregate 3_8inch | **70 samples** | 50 / 14 / 6 |
+| Aggregate 1 inch  | **1 sample** | รอข้อมูลเพิ่ม (ยังต้อง ≥4 ถึงจะ train ได้) |
+| **รวม** | **235 samples** | |
 
 ### Production Ratio Analysis (Model A — % Individual Retain)
 
@@ -207,11 +210,12 @@ Image naming: `sample_id=1` → `Sample_001.jpg`
 /workspace/AggNet/
 ├── code/
 │   ├── aggnet_dataset3.py       ← script หลัก (CBAM + Multi-Task, splits.json)
+│   ├── make_splits.py           ← สร้าง splits.json ใหม่ (รันเมื่อ dataset เปลี่ยนขนาด)
 │   ├── aggnet_single_image.py   ← script เก่า (single-image)
 │   ├── aggnet_multiview.py      ← script เก่า (multi-view)
 │   └── app_aggnet_qc.py         ← Web App Flask (port 5000) — ใช้ CBAM+MT model
 ├── data/
-│   ├── dataset3/                ← 147 samples + labels.csv + splits.json (ปัจจุบัน)
+│   ├── dataset3/                ← 235 samples + labels.csv + splits.json (ปัจจุบัน)
 │   ├── source_split/            ← images จัดเป็น Model_A/B/C × train/val/test
 │   ├── dataset_single/          ← 143 samples (Dataset เดิม)
 │   └── dataset_multiview/       ← 21 samples × 3 views
@@ -286,7 +290,10 @@ run("cd /workspace/AggNet && python code/aggnet_dataset3.py")
 
 ### `.gitignore` (root ของ repo)
 ```
-data/
+data/*
+!data/dataset3/
+data/dataset3/*
+!data/dataset3/splits.json      ← exception: splits.json track ผ่าน git (เล็ก + จำเป็นต่อ reproduce)
 models/
 outputs/
 test_set/
@@ -298,15 +305,50 @@ __pycache__/
 
 ### สิ่งที่ต้องเช็คทุกครั้งที่ย้าย/อัปโหลด dataset ใหม่บน Marimo
 - ระวัง **nested folder ซ้ำ** ถ้า unzip ด้วย `unzip -o X.zip -d X` ทั้งที่ zip มีโฟลเดอร์ชื่อเดียวกันอยู่ข้างในอยู่แล้ว จะได้ `X/X/...` ซ้อนกัน 2 ชั้น — เช็คด้วย `find /workspace -maxdepth 3 -iname 'AggNet' -type d` ก่อนเสมอ
+- ถ้า dataset โต/เปลี่ยนขนาด (จำนวน samples เปลี่ยน) **ต้องรัน `code/make_splits.py` ใหม่เสมอ** — `splits.json` เก่าจะไม่ครอบคลุม sample_id ใหม่ และ `train()` จะ error/skip ถ้าไม่มี `splits.json` เลย
+
+### รัน background process (train / web app) ห้ามใช้ `capture_output=True`
+`subprocess.run(["bash","-lc", cmd], capture_output=True)` ร่วมกับคำสั่งที่ backgrounded ด้วย `&` **จะค้างตลอดกาล** — pipe ที่ capture stdout/stderr ไม่ปิดจนกว่าทุก process (รวม backgrounded child) จะปิด fd หมด เป็น gotcha ของ Python subprocess เอง ไม่เกี่ยวกับ Marimo ใช้ฟังก์ชันแยกแทน:
+```python
+def launch_bg(cmd):
+    subprocess.run(["bash", "-lc", cmd],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL)
+
+launch_bg("cd /workspace/AggNet && nohup python3 code/aggnet_dataset3.py > outputs/dataset3/train.log 2>&1 < /dev/null &")
+```
+ถ้า cell ค้างไปแล้ว (เผลอใช้ `run()`/`capture_output=True`) กด **Stop/Interrupt cell** ได้เลย — process ที่ `nohup` ไปแล้วไม่ตายตาม (detach จาก cell/kernel แล้ว รอด reconnect/restart kernel ได้ด้วย) เช็คสถานะจริงด้วย `ps aux | grep python3`
+
+### เข้าถึง Web App จากภายนอก (RAILAB ไม่มี port forwarding ในตัว)
+เช็คแล้ว — Marimo settings (Display/Packages/Runtime/AI/Labs) ไม่มี Ports/Network section เลย ใช้ **Cloudflare Tunnel** แทน (ไม่ต้องสมัครบัญชี):
+```python
+run("cd /workspace/AggNet && curl -L --output cloudflared "
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 "
+    "&& chmod +x cloudflared")
+launch_bg("cd /workspace/AggNet && nohup ./cloudflared tunnel --url http://localhost:5000 "
+          "> outputs/dataset3/tunnel.log 2>&1 < /dev/null &")
+run("sleep 10 && grep -o 'https://[a-zA-Z0-9.-]*trycloudflare.com' /workspace/AggNet/outputs/dataset3/tunnel.log")
+```
+⚠️ URL แบบนี้**ชั่วคราว** (เปลี่ยนทุกครั้งที่รันใหม่, ไม่มี auth, หายเมื่อปิด session) — ใช้ demo/ทดสอบเท่านั้น ห้ามใช้จริงกับลูกค้า (ดูแผน production deployment ใน `experiment_log.md` Session 4 ข้อ 9)
+
+### Package ที่ต้องติดตั้งเพิ่มบน environment ใหม่ (ไม่มีติดมากับ image)
+```
+pip install flask reportlab
+```
+(torch/torchvision/pandas/numpy/matplotlib มีอยู่แล้ว — เช็คด้วย `pip list` หรือ error ตอน import ก่อนเสมอถ้าเจอ `ModuleNotFoundError` บน environment ใหม่)
 
 ---
 
 ## สิ่งที่ยังไม่ได้ทำ / TODO
 
 ### Priority สูง (ทำก่อน)
-- [ ] **เพิ่มข้อมูล 3_4inch** โดยเฉพาะ "fine content สูง" (1/2">55%) และ "coarse มาก" (3/4"<70%) — ปัจจุบัน 1/2" MAE ~13%, 3/8" MAE ~11% ยังสูง
-- [ ] **เพิ่มข้อมูล Aggregate 1 inch** ให้ถึง ≥ 4 samples เพื่อเปิด train Model C
+- [ ] **เพิ่มข้อมูล 3_4inch** โดยเฉพาะ "fine content สูง" (1/2">55%) และ "coarse มาก" (3/4"<70%) — Run 09 (235 samples) 1/2" MAE ยังสูง 12.46% (val), 3/8" 11.11% (val) แทบไม่ขยับจาก Run 08 ทั้งที่ data เพิ่ม — จุดนี้ยังเป็นคอขวดจริง
+- [ ] **เพิ่มข้อมูล Aggregate 1 inch** ให้ถึง ≥ 4 samples เพื่อเปิด train Model C (ยังมีแค่ 1 sample)
+- [ ] เช็คว่า accuracy tolerance ที่เปลี่ยนจาก ±5% → ±10% ใน Run 09 ตั้งใจแก้โค้ดหรือเป็น default เดิม (ยังไม่ตรวจสอบ)
+- [ ] Deploy web app ขึ้น production จริง (Fly.io/Cloud Run + Basic Auth) — ตอนนี้เข้าถึงได้แค่ผ่าน Cloudflare quick tunnel ชั่วคราวเท่านั้น
 - [x] ~~อัปเดต Web App~~ — ใช้ CBAM+MT model, Report 3/8" ตัด 1"/3/4" แล้ว
+- [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว (ดู experiment_log.md)
 
 ### Priority กลาง
 - [ ] **k-fold cross-validation** แทน single val split เพื่อ metric ที่เชื่อถือได้มากขึ้น
@@ -335,7 +377,7 @@ __pycache__/
 1. **อ่าน experiment_log.md** ก่อนเสมอ เพื่อเข้าใจว่าทดลองอะไรไปแล้วบ้าง
 2. **เสนอ code ที่ run ได้ทันที** — ไม่ใช่ pseudocode เท่านั้น
 3. **แจ้ง assumption** เช่น สมมติว่า labels.csv มี column ชื่อ `weight_g`
-4. **Dataset ปัจจุบัน 145 samples** (3_4inch: 104, 3_8inch: 40, 1inch: 1) — ทุก suggestion ต้องคำนึงถึง overfitting
+4. **Dataset ปัจจุบัน 235 samples** (3_4inch: 164, 3_8inch: 70, 1inch: 1) — ทุก suggestion ต้องคำนึงถึง overfitting (เดิม 145 samples ก่อน 2026-07-19)
 5. **ตรวจสอบ monotonic constraint** ทุกครั้งที่มี prediction output
 6. **อ้างอิง config ใน aggnet_dataset3.py** ก่อนแนะนำ hyperparameter
 7. **Model ปัจจุบันใช้ CBAM + Multi-Task** — อย่าแนะนำ architecture ที่ถอยหลังกลับไป GAP ธรรมดา
