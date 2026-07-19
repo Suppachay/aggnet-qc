@@ -1,4 +1,7 @@
-data/
+data/*
+!data/dataset3/
+data/dataset3/*
+!data/dataset3/splits.json
 models/
 outputs/
 test_set/
