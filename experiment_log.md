@@ -641,4 +641,54 @@
 6. **น้ำหนักมีผลน้อยมาก** (เปลี่ยน 400→900g ผล %Passing เปลี่ยนไม่ถึง 1%)
 7. **Source naming ไม่สม่ำเสมอ** — 39 unique strings → ~25 แหล่งจริง (typo/spacing)
 
+---
+
+## Session 4 — 2026-07-19 (ย้ายแพลตฟอร์ม: SSH → RAILAB Marimo + ตั้ง Git Workflow)
+
+### สิ่งที่ทำในเซสชันนี้
+
+#### 1. ปัญหาต้นทาง
+- เซิร์ฟเวอร์ SSH เดิม (`/root/AggNet`) **เชื่อมต่อไม่ได้แล้ว**
+- ย้ายมาใช้ **RAILAB Marimo Notebook Platform** (`https://railab.raikmitl.com/notebook/files`) แทน — เข้าถึงไฟล์ผ่าน browser (`My Files`) + Python notebook cell (`My Session`) เท่านั้น ไม่มี terminal/SSH ตรง
+
+#### 2. อัปโหลด & แตกไฟล์ข้อมูล
+- อัปโหลด `AggNet.zip` (494.5MB) และ `Dataset3.zip` (245.8MB) ผ่าน Marimo file manager
+- แตก zip แล้วเจอ **nested folder ซ้ำ** (`AggNet/AggNet/...`) เพราะคำสั่ง `unzip -d AggNet` ซ้อนกับโฟลเดอร์ชื่อเดียวกันที่อยู่ในตัว zip เอง — แก้ด้วย `mv AggNet/* .` (dotglob) แล้ว `rmdir AggNet` ให้แบนเหลือ `/workspace/AggNet/{code,data,models,outputs,test_set,*.md}`
+
+#### 3. แก้ hardcoded path: `/root/AggNet` → `/workspace/AggNet`
+แก้ **15 จุดใน 4 ไฟล์** (แก้ที่ local ก่อน push):
+
+| ไฟล์ | จุดที่แก้ |
+|---|---|
+| `aggnet_dataset3.py` | `DATA_DIR`, `SAVE_DIR`, `MODEL_DIR`, comment ตัวอย่าง `predict()` |
+| `aggnet_multiview.py` | `DATA_DIR`, `SAVE_DIR`, comment ตัวอย่าง `predict()` ×3 |
+| `aggnet_single_image.py` | `DATA_DIR`, `SAVE_DIR`, comment ตัวอย่าง `predict()` |
+| `app_aggnet_qc.py` | `MODEL_PATH_34`, `MODEL_PATH_38`, `SAVE_DIR` |
+
+#### 4. ตั้ง Git Workflow (local ↔ GitHub ↔ Marimo)
+**เหตุผล:** ไม่มี SSH เข้า Marimo โดยตรง แต่ notebook cell รัน Python ได้ → ใช้ `subprocess` ยิง `git pull` แทนได้ (ไม่ต้อง download–edit–upload zip ~500MB ทุกครั้งที่แก้โค้ด)
+
+- Local repo: `D:\KMITL-ROI\Project\AI for Gradation Analysis\AggNet\`
+- GitHub private repo: **`https://github.com/Suppachay/aggnet-qc.git`**
+- `.gitignore`: track เฉพาะ `code/*.py` + `*.md` — ไม่ track `data/`, `models/`, `outputs/`, `test_set/`, `*.pth`, รูปภาพ, zip
+- Marimo (`/workspace/AggNet`): `git init` + `git remote add origin ...` + `git fetch` + `git checkout -f main` (ครั้งแรก) → หลังจากนี้ใช้ `git pull` ผ่าน notebook cell
+
+**ปัญหาที่เจอระหว่างตั้งค่า:**
+| ปัญหา | สาเหตุ | วิธีแก้ |
+|---|---|---|
+| Marimo error "redefines variables from other cells" | Marimo เป็น reactive notebook — ตัวแปร/ฟังก์ชันชื่อเดียวกัน (เช่น `import subprocess`, `def run`) ประกาศซ้ำได้แค่ 1 cell ทั้ง notebook (ต่างจาก Jupyter) | ไม่ import/def ซ้ำ เรียกใช้ตัวที่มีอยู่แล้วจาก cell ก่อนหน้าแทน |
+| `git push` timeout แล้ว 403 "denied to Suppachay888" | Windows Git Credential Manager cache คนละ GitHub account กับเจ้าของ repo (`Suppachay`) — cache อยู่ใน interactive desktop session ที่เครื่องมือ automation มองไม่เห็น | user logout/login GitHub เป็น account ที่ถูกต้องเองในเครื่อง แล้ว push สำเร็จ |
+
+#### 5. สถานะปัจจุบัน (จบเซสชัน)
+- ✅ Local, GitHub, Marimo sync กันแล้ว — `git status` สะอาดทั้ง 2 ฝั่ง, commit `8f49d34`
+- ✅ Path ทุกไฟล์ชี้ไป `/workspace/AggNet/...` ถูกต้อง
+- ⏳ ยังไม่ได้ run training จริงบนแพลตฟอร์มใหม่ — รอทดสอบรันครั้งแรก
+- ⏳ ยังไม่ยืนยันว่า `data/dataset3/` มีครบ 147 samples (ต้องเช็คว่า `Dataset3.zip` ที่อัปโหลดแยกจำเป็นต้องแตกเพิ่มไหม หรือซ้ำกับที่มีใน `AggNet.zip` แล้ว)
+- ⚠️ GitHub แจ้งเตือนรหัสผ่านบัญชี `Suppachay` อยู่ในลิสต์รหัสผ่านที่ใช้ซ้ำเยอะ — ต้องเปลี่ยนก่อน 18 ส.ค. 2026 (ที่ github.com/settings/security)
+
+**ขั้นตอนถัดไป:**
+- [ ] เช็ค/ยืนยันความครบถ้วนของ `data/dataset3/` บน Marimo
+- [ ] รัน `aggnet_dataset3.py` ครั้งแรกบนแพลตฟอร์มใหม่ ยืนยันว่า path ใหม่ทำงานถูกต้อง (Run 09)
+- [ ] เปลี่ยนรหัสผ่าน GitHub
+
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->

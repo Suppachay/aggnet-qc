@@ -26,11 +26,13 @@ description: |
 
 ## โค้ดปัจจุบัน: `aggnet_dataset3.py`
 
-**Path:** `/root/AggNet/code/aggnet_dataset3.py`
-**Dataset:** `/root/AggNet/data/dataset3/`
-**Splits:** `/root/AggNet/data/dataset3/splits.json`
-**Output:** `/root/AggNet/outputs/dataset3/`
-**Models:** `/root/AggNet/models/dataset3/`
+**Path:** `/workspace/AggNet/code/aggnet_dataset3.py`
+**Dataset:** `/workspace/AggNet/data/dataset3/`
+**Splits:** `/workspace/AggNet/data/dataset3/splits.json`
+**Output:** `/workspace/AggNet/outputs/dataset3/`
+**Models:** `/workspace/AggNet/models/dataset3/`
+
+> **หมายเหตุ (2026-07-19):** เปลี่ยน root path จาก `/root/AggNet` → `/workspace/AggNet` เพราะย้ายแพลตฟอร์ม — ดู [Environment & Workflow](#environment--workflow-2026-07-19) ด้านล่าง
 
 ### Configuration หลัก (ณ 2026-06-25)
 
@@ -202,7 +204,7 @@ Image naming: `sample_id=1` → `Sample_001.jpg`
 ## Dataset Structure
 
 ```
-/root/AggNet/
+/workspace/AggNet/
 ├── code/
 │   ├── aggnet_dataset3.py       ← script หลัก (CBAM + Multi-Task, splits.json)
 │   ├── aggnet_single_image.py   ← script เก่า (single-image)
@@ -232,18 +234,70 @@ Image naming: `sample_id=1` → `Sample_001.jpg`
 
 ```python
 # Train (reads splits.json automatically)
-python /root/AggNet/code/aggnet_dataset3.py
+python /workspace/AggNet/code/aggnet_dataset3.py
 
 # Web App (CBAM + Multi-Task model)
-python /root/AggNet/code/app_aggnet_qc.py   # http://0.0.0.0:5000
+python /workspace/AggNet/code/app_aggnet_qc.py   # http://0.0.0.0:5000
 
 # Inference (uncomment ใน __main__)
 result = predict(
-    image_path  = "/root/AggNet/data/dataset3/Sample_006.jpg",
+    image_path  = "/workspace/AggNet/data/dataset3/Sample_006.jpg",
     weight_g    = 620,
     source_name = "ART CONCRETE COMPANY LIMITED"
 )
 ```
+
+---
+
+## Environment & Workflow (2026-07-19)
+
+**เปลี่ยนแพลตฟอร์ม:** SSH เข้าเซิร์ฟเวอร์เดิม (`/root/AggNet`) ใช้ไม่ได้แล้ว → ย้ายมาใช้ **RAILAB Marimo Notebook Platform** (`https://railab.raikmitl.com/notebook/files`) แทน — root path จึงเปลี่ยนเป็น **`/workspace/AggNet`**
+
+### สถาปัตยกรรมการเข้าถึงไฟล์
+
+| ที่เก็บ | Path | เข้าถึงยังไง |
+|---|---|---|
+| Local (VS Code) | `D:\KMITL-ROI\Project\AI for Gradation Analysis\AggNet\` | แก้โค้ดที่นี่ |
+| GitHub (private repo) | `https://github.com/Suppachay/aggnet-qc.git` | ตัวกลาง sync — **track เฉพาะ `code/*.py` + `*.md`** (ดู `.gitignore`) |
+| Marimo (`/workspace/AggNet`) | `/workspace/AggNet/` | รัน training/inference จริง — `data/`, `models/`, `outputs/` ไม่ผ่าน git (ใหญ่เกินไป, อัปโหลดตรงผ่าน Marimo file manager) |
+
+**เหตุผลที่ใช้ git แทน SSH:** Marimo ไม่มี terminal/SSH ตรง มีแต่ notebook cell ที่รัน Python ได้ — ใช้ `subprocess` ยิง `git pull` แทนการ SSH เข้าไปแก้ไฟล์ตรงๆ ทำให้ไม่ต้อง download–edit–upload zip ทุกครั้งที่แก้โค้ด (เดิม zip เต็ม ~500MB)
+
+### Workflow ปกติ
+
+**Local:**
+```powershell
+git add -A && git commit -m "..." && git push
+```
+
+**Marimo (`My Session`, Python cell):**
+```python
+import subprocess
+def run(cmd):
+    r = subprocess.run(["bash","-lc", cmd], capture_output=True, text=True)
+    print("OUT:", r.stdout, "\nERR:", r.stderr)
+    return r
+
+run("cd /workspace/AggNet && git pull")
+run("cd /workspace/AggNet && python code/aggnet_dataset3.py")
+```
+
+⚠️ **Marimo quirk:** เป็น reactive notebook (ต่างจาก Jupyter) — ตัวแปร/ฟังก์ชันชื่อเดียวกัน (เช่น `import subprocess`, `def run`) นิยามซ้ำได้แค่ 1 cell เท่านั้นทั้ง notebook ถ้า error "redefines variables from other cells" ให้ลบ import/def ที่ซ้ำออกจาก cell ใหม่ แล้วเรียกใช้ตัวที่มีอยู่แล้วแทน
+
+### `.gitignore` (root ของ repo)
+```
+data/
+models/
+outputs/
+test_set/
+*.pth
+*.jpg / *.jpeg / *.png
+*.zip
+__pycache__/
+```
+
+### สิ่งที่ต้องเช็คทุกครั้งที่ย้าย/อัปโหลด dataset ใหม่บน Marimo
+- ระวัง **nested folder ซ้ำ** ถ้า unzip ด้วย `unzip -o X.zip -d X` ทั้งที่ zip มีโฟลเดอร์ชื่อเดียวกันอยู่ข้างในอยู่แล้ว จะได้ `X/X/...` ซ้อนกัน 2 ชั้น — เช็คด้วย `find /workspace -maxdepth 3 -iname 'AggNet' -type d` ก่อนเสมอ
 
 ---
 
@@ -286,3 +340,4 @@ result = predict(
 6. **อ้างอิง config ใน aggnet_dataset3.py** ก่อนแนะนำ hyperparameter
 7. **Model ปัจจุบันใช้ CBAM + Multi-Task** — อย่าแนะนำ architecture ที่ถอยหลังกลับไป GAP ธรรมดา
 8. **splits.json** กำหนด train/val/test — อย่าใช้ random split ใหม่เอง
+9. **Path ปัจจุบันคือ `/workspace/AggNet` ไม่ใช่ `/root/AggNet`** (เปลี่ยนแพลตฟอร์มเป็น RAILAB Marimo ตั้งแต่ 2026-07-19) — sync โค้ดผ่าน git (ดู [Environment & Workflow](#environment--workflow-2026-07-19)) ไม่ใช่ SSH แล้ว
