@@ -1,0 +1,13 @@
+data/
+models/
+outputs/
+test_set/
+*.pth
+*.jpg
+*.jpeg
+*.png
+*.zip
+__pycache__/
+*.pyc
+venv/
+.venv/
