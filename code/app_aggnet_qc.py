@@ -578,7 +578,7 @@ HTML_PAGE = """
       <p>แตะเพื่อเลือกภาพ หรือถ่ายภาพ</p>
       <span>รองรับ JPG, PNG — ภาพรวมหินก่อนร่อน</span>
     </div>
-    <input type="file" id="fileInput" accept="image/*" capture="environment"
+    <input type="file" id="fileInput" accept="image/*"
            onchange="handleFile(this)">
     <div id="preview-box">
       <img id="preview-img" src="" alt="preview">
