@@ -17,6 +17,8 @@ description: |
 
 **หมายเหตุ Dataset3:** ตัด `1inch` ออกเพราะ = 100% ทุก sample → model จึง predict จริง 6 sieve (3/4", 1/2", 3/8", #4, #8, Pan)
 
+> **📋 ดู [`guideline_sample_preparation.md`](guideline_sample_preparation.md)** สำหรับแนวทางการเตรียมตัวอย่างหินตาม ASTM C136/C702 — ทั้งฉบับ train model (เข้มงวด) และฉบับใช้งาน Web App (ผู้ใช้ทั่วไป) — รวมข้อสังเกตสำคัญว่าน้ำหนักตัวอย่างปัจจุบัน (400–900g) ต่ำกว่าเกณฑ์ขั้นต่ำ ASTM ทุกประเภท ซึ่งอาจเป็นส่วนหนึ่งของสาเหตุที่ 1/2"/3/8" ยัง MAE สูง
+
 **Aggregate Type ที่รองรับ (2026-06-25):**
 - `Aggregate 3_4inch` → Model A (6 sieves) — CBAM + Multi-Task
 - `Aggregate 3_8inch` → Model B (3 sieves: No4/No8/Pan, hardcode 3/4"=0, 1/2"=100, 3/8"≈99.7) — CBAM only
