@@ -49,13 +49,23 @@ description: |
 | `LR_HEAD` | 3e-4 | Phase 1 LR |
 | `LR_FINETUNE` | 2e-5 | Phase 2 LR |
 
-### Data Split (splits.json)
+### Data Split (splits.json) — 5-Fold CV ตั้งแต่ 2026-08-15
+
+> เปลี่ยนจาก single train/val/test split เป็น **5-fold CV** เพราะ val set เดิมเล็กเกินไป (Model A ~27 samples) ทำให้ metric แกว่งสูง แยกไม่ออกว่าการเปลี่ยนแปลงช่วยจริงหรือ noise
 
 | Set | สัดส่วน | หมายเหตุ |
 |-----|---------|----------|
-| Train | 70% | source-aware stratified split |
-| Val | 20% | ใช้ตอน training เพื่อ early stopping |
-| Test | 10% | **held out ไม่ใช้ตอน train เลย** |
+| Test | 10% | **held out ไม่ใช้เลยตลอด CV** — evaluate ครั้งเดียวตอนจบด้วย final model |
+| Pool (train+val) | 90% | แบ่งเป็น **5 fold** (source-aware round-robin) — วนแต่ละ fold เป็น val ที่เหลือเป็น train |
+
+`splits.json` โครงสร้างใหม่: `{model_key: {"test": [...], "folds": [[...] × 5]}}` (เดิมคือ `{train, val, test}`) — สร้างโดย `code/make_splits.py`
+
+**Training flow (`train_kfold()` ใน `aggnet_dataset3.py`):**
+1. วน 5 fold (แต่ละ fold = model ใหม่, two-phase training เดิมแบบมี early stopping จาก val ของ fold นั้น)
+2. รายงาน CV metric เป็น mean ± std ข้าม 5 fold (ตัวเลขที่เชื่อถือได้กว่า single val)
+3. Retrain final model บน **full pool** (ไม่มี val set) ด้วย Phase 2 epoch = median ของ best epoch จากแต่ละ fold
+4. Evaluate final model บน test set **ครั้งเดียว** → ผลที่ deploy จริง
+5. บันทึกเป็นชื่อไฟล์เดิม (`aggnet_34_best.pth`/`aggnet_38_best.pth`) — `app_aggnet_qc.py` ไม่ต้องแก้อะไร
 
 ### Architecture: EfficientNet-B0 + CBAM + Multi-Task (ตั้งแต่ Run 08)
 
@@ -119,20 +129,21 @@ CBAM (Channel Attention + Spatial Attention)   ← NEW: โฟกัสบริ
 - ตรวจ label ซ้ำทุก sieve column ภายใน agg_type เดียวกัน
 - keep first occurrence, drop rest พร้อม warning
 - **Dataset3 (2026-06-25):** ตัดออก 2 samples (093=051, 132=049) → เหลือ **145 samples**
-- **Dataset3 (2026-07-19):** เก็บข้อมูลเพิ่มระหว่างย้ายแพลตฟอร์ม 237 samples ดิบ → เหลือ **235 samples** หลัง clean — ดูตาราง Dataset ด้านล่าง (อัปเดตแล้ว)
+- **Dataset3 (2026-07-19):** เก็บข้อมูลเพิ่มระหว่างย้ายแพลตฟอร์ม 237 samples ดิบ → เหลือ **235 samples** หลัง clean
+- **Dataset3 (2026-08-15):** เก็บเพิ่มอีก 345 samples ดิบ → เหลือ **339 samples** หลัง clean (3_4inch: 236, 3_8inch: 102, 1inch: 1) — ดูตาราง Dataset ด้านล่าง (อัปเดตแล้ว) — เจอ label ซ้ำใหม่ 4 คู่ (240,259,344,345) ที่ยังไม่ confirm กับทีมเก็บข้อมูล ดู `experiment_log.md` Session 5
 
 ---
 
-## Dataset (อัปเดตล่าสุด 2026-07-19)
+## Dataset (อัปเดตล่าสุด 2026-08-15)
 
-> เดิม 145 samples (2026-06-25) → เพิ่มเป็น **237 ดิบ / 235 หลัง clean** — `splits.json` สร้างใหม่ด้วย `code/make_splits.py` (source-aware, แบ่งสัดส่วนภายในแต่ละ Source แทนการ assign ทั้ง group — ดู `experiment_log.md` Session 4 ข้อ 6 สำหรับเหตุผล)
+> 145 (2026-06-25) → 235 (2026-07-19) → **339 samples หลัง clean (2026-08-15)** — `splits.json` สร้างด้วย `code/make_splits.py` เป็น test (held out) + 5-fold pool
 
-| ประเภท | จำนวน (หลัง clean) | Split (train/val/test) |
+| ประเภท | จำนวน (หลัง clean) | Split (test / 5-fold pool) |
 |--------|-------------------|----------------------|
-| Aggregate 3_4inch | **164 samples** | 126 / 27 / 11 |
-| Aggregate 3_8inch | **70 samples** | 50 / 14 / 6 |
-| Aggregate 1 inch  | **1 sample** | รอข้อมูลเพิ่ม (ยังต้อง ≥4 ถึงจะ train ได้) |
-| **รวม** | **235 samples** | |
+| Aggregate 3_4inch | **236 samples** | test=18, folds=[45,41,46,42,44] |
+| Aggregate 3_8inch | **102 samples** | test=9, folds=[19,19,19,19,17] |
+| Aggregate 1 inch  | **1 sample** | รอข้อมูลเพิ่ม (ยังต้อง ≥7 ถึงจะ train ได้ตาม K_FOLDS+2) |
+| **รวม** | **339 samples** | |
 
 ### Production Ratio Analysis (Model A — % Individual Retain)
 
@@ -211,13 +222,14 @@ Image naming: `sample_id=1` → `Sample_001.jpg`
 ```
 /workspace/AggNet/
 ├── code/
-│   ├── aggnet_dataset3.py       ← script หลัก (CBAM + Multi-Task, splits.json)
+│   ├── aggnet_dataset3.py       ← script หลัก (CBAM + Multi-Task, train_kfold(), splits.json)
 │   ├── make_splits.py           ← สร้าง splits.json ใหม่ (รันเมื่อ dataset เปลี่ยนขนาด)
+│   ├── validate_dataset.py      ← QC labels.csv (missing values, duplicate label, missing image ฯลฯ)
 │   ├── aggnet_single_image.py   ← script เก่า (single-image)
 │   ├── aggnet_multiview.py      ← script เก่า (multi-view)
 │   └── app_aggnet_qc.py         ← Web App Flask (port 5000) — ใช้ CBAM+MT model
 ├── data/
-│   ├── dataset3/                ← 235 samples + labels.csv + splits.json (ปัจจุบัน)
+│   ├── dataset3/                ← 339 samples + labels.csv + splits.json (ปัจจุบัน) — ⚠️ ไม่ track ผ่าน git ยกเว้น splits.json
 │   ├── source_split/            ← images จัดเป็น Model_A/B/C × train/val/test
 │   ├── dataset_single/          ← 143 samples (Dataset เดิม)
 │   └── dataset_multiview/       ← 21 samples × 3 views
@@ -239,8 +251,14 @@ Image naming: `sample_id=1` → `Sample_001.jpg`
 ## Quick Start
 
 ```python
-# Train (reads splits.json automatically)
+# Train (reads splits.json automatically, runs 5-fold CV + final retrain per model)
 python /workspace/AggNet/code/aggnet_dataset3.py
+
+# Regenerate splits.json after adding new data
+python /workspace/AggNet/code/make_splits.py
+
+# QC labels.csv before adding to dataset
+python /workspace/AggNet/code/validate_dataset.py
 
 # Web App (CBAM + Multi-Task model)
 python /workspace/AggNet/code/app_aggnet_qc.py   # http://0.0.0.0:5000
@@ -337,8 +355,12 @@ run("sleep 10 && grep -o 'https://[a-zA-Z0-9.-]*trycloudflare.com' /workspace/Ag
 ### Package ที่ต้องติดตั้งเพิ่มบน environment ใหม่ (ไม่มีติดมากับ image)
 ```
 pip install flask reportlab
+apt-get update && apt-get install -y p7zip-full   # ถ้าต้องแตกไฟล์ .7z
 ```
 (torch/torchvision/pandas/numpy/matplotlib มีอยู่แล้ว — เช็คด้วย `pip list` หรือ error ตอน import ก่อนเสมอถ้าเจอ `ModuleNotFoundError` บน environment ใหม่)
+
+### ⚠️ ข้อมูลดิบใน `data/` ไม่มี safety net — อย่าลบทิ้งจนกว่าจะ sync สำเร็จแน่นอน
+`data/dataset3/` (รูปภาพ + `labels.csv`) **ไม่ track ผ่าน git** (ยกเว้น `splits.json`) — ถ้าโฟลเดอร์นี้หายบน Marimo ไม่ว่าด้วยเหตุผลใด **`git pull` กู้คืนไม่ได้เลย** (2026-08-15 เคยเจอเหตุการณ์นี้จริง — ต้องอัปโหลด zip/7z ใหม่ทั้งหมด) เก็บไฟล์ zip/7z ต้นฉบับไว้ใน Marimo **My Files** เสมอเป็น backup ขั้นต่ำ ก่อนลบโฟลเดอร์เก่าทิ้งต้องมั่นใจว่าของใหม่ sync เข้าที่แล้วจริง (เช็คจำนวนไฟล์/แถวให้ตรงก่อน)
 
 ---
 
@@ -349,11 +371,15 @@ pip install flask reportlab
 - [ ] **เพิ่มข้อมูล Aggregate 1 inch** ให้ถึง ≥ 4 samples เพื่อเปิด train Model C (ยังมีแค่ 1 sample)
 - [ ] เช็คว่า accuracy tolerance ที่เปลี่ยนจาก ±5% → ±10% ใน Run 09 ตั้งใจแก้โค้ดหรือเป็น default เดิม (ยังไม่ตรวจสอบ)
 - [ ] Deploy web app ขึ้น production จริง (Fly.io/Cloud Run + Basic Auth) — ตอนนี้เข้าถึงได้แค่ผ่าน Cloudflare quick tunnel ชั่วคราวเท่านั้น
+- [ ] รอผล 5-fold CV training จบ (Run 10) — เริ่มรันแล้วตั้งแต่ 2026-08-15 ยังไม่เสร็จ
+- [ ] Confirm label ซ้ำใหม่ 4 sample (240,259,344,345) กับทีมเก็บข้อมูล
+- [ ] หาไฟล์ภาพ `Sample_330` ที่หาย หรือลบ row ออกจาก labels.csv
+- [ ] ขอ ASTM C33 size class + Control range ของ Model B (No4/No8) เพื่อทำ Production Ratio analysis ให้ครบ
 - [x] ~~อัปเดต Web App~~ — ใช้ CBAM+MT model, Report 3/8" ตัด 1"/3/4" แล้ว
 - [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว (ดู experiment_log.md)
+- [x] ~~k-fold cross-validation~~ — implement แล้ว 2026-08-15 (`train_kfold()`), ดู experiment_log.md Session 5
 
 ### Priority กลาง
-- [ ] **k-fold cross-validation** แทน single val split เพื่อ metric ที่เชื่อถือได้มากขึ้น
 - [ ] เพิ่ม `scaler.json` บันทึก weight normalization params (ปัจจุบัน hardcode WEIGHT_MIN/MAX)
 - [ ] ASTM C33 gradation limits shading ใน grading curve plot
 - [ ] Export batch inference เป็น CSV
@@ -379,9 +405,9 @@ pip install flask reportlab
 1. **อ่าน experiment_log.md** ก่อนเสมอ เพื่อเข้าใจว่าทดลองอะไรไปแล้วบ้าง
 2. **เสนอ code ที่ run ได้ทันที** — ไม่ใช่ pseudocode เท่านั้น
 3. **แจ้ง assumption** เช่น สมมติว่า labels.csv มี column ชื่อ `weight_g`
-4. **Dataset ปัจจุบัน 235 samples** (3_4inch: 164, 3_8inch: 70, 1inch: 1) — ทุก suggestion ต้องคำนึงถึง overfitting (เดิม 145 samples ก่อน 2026-07-19)
+4. **Dataset ปัจจุบัน 339 samples** (3_4inch: 236, 3_8inch: 102, 1inch: 1) — ทุก suggestion ต้องคำนึงถึง overfitting (เดิม 145 samples ก่อน 2026-07-19, 235 ก่อน 2026-08-15)
 5. **ตรวจสอบ monotonic constraint** ทุกครั้งที่มี prediction output
 6. **อ้างอิง config ใน aggnet_dataset3.py** ก่อนแนะนำ hyperparameter
 7. **Model ปัจจุบันใช้ CBAM + Multi-Task** — อย่าแนะนำ architecture ที่ถอยหลังกลับไป GAP ธรรมดา
-8. **splits.json** กำหนด train/val/test — อย่าใช้ random split ใหม่เอง
+8. **splits.json** กำหนด test + 5-fold pool (ตั้งแต่ 2026-08-15) — อย่าใช้ random split ใหม่เอง, train ผ่าน `train_kfold()` ไม่ใช่ `train()` เดิม (ถูกลบไปแล้ว)
 9. **Path ปัจจุบันคือ `/workspace/AggNet` ไม่ใช่ `/root/AggNet`** (เปลี่ยนแพลตฟอร์มเป็น RAILAB Marimo ตั้งแต่ 2026-07-19) — sync โค้ดผ่าน git (ดู [Environment & Workflow](#environment--workflow-2026-07-19)) ไม่ใช่ SSH แล้ว

@@ -829,4 +829,70 @@ Setup ปัจจุบัน (Flask dev server + cloudflared quick tunnel) เ
 - [ ] เพิ่มข้อมูล 1/2"/3/8" ที่ variance สูงต่อ
 - [ ] เปลี่ยนรหัสผ่าน GitHub (ค้างมาตั้งแต่ก่อนหน้า)
 
+---
+
+## Session 5 — 2026-08-15 (Data QC + ASTM C33 Analysis + K-Fold CV)
+
+### 1. Dataset โต 237 → 345 raw samples (339 หลัง dedup)
+
+| ประเภท | raw | หลัง dedup |
+|---|---|---|
+| Aggregate 3_4inch | 242 | 236 |
+| Aggregate 3_8inch | 102 | 102 |
+| Aggregate 1 inch | 1 | 1 |
+| **รวม** | **345** | **339** |
+
+### 2. Data Validation (`code/validate_dataset.py` — เครื่องมือใหม่)
+
+เขียน script ตรวจสอบ labels.csv อัตโนมัติ (missing values, weight/percent range, monotonicity, Aggregate Type consistency, missing images, label-duplicate detection ผ่าน logic เดียวกับ `clean_duplicates()`)
+
+**สิ่งที่แก้ความเข้าใจผิดของตัวเอง:** script แรกรายงาน "102 samples ผิด monotonicity" (`3_4inch < 1_2inch`) — ตรวจสอบแล้วพบว่า**ไม่ใช่ error** เป็น hardcode convention ที่ตั้งใจ 100% consistent สำหรับ `Aggregate 3_8inch` ทุกแถว (1inch=0, 3_4inch=0, 1_2inch=100 เสมอ) ตรงกับที่ skill.md บันทึกไว้อยู่แล้ว
+
+**ปัญหาจริงที่พบ:**
+- **ภาพหาย 1 sample**: `Sample_330` (Aggregate 3_4inch, Source=ศิลาธาราโม่6) มี label แต่ไม่มีไฟล์ภาพ — ยืนยันซ้ำอีกครั้งตอน sync ข้อมูลไป Marimo ว่าขาดจริงทั้ง local และ server (`clean_duplicates`/`load_records` จะ skip แถวนี้อัตโนมัติ ไม่ crash)
+- **Label ซ้ำเพิ่มใหม่ 4 คู่** (นอกจาก 093=051, 132=049 ที่รู้อยู่แล้ว): 240=227, 259=258, 344=327, 345=326 — ทุกคู่ Source/วันที่ต่างกันแต่ %Passing เหมือนกันเป๊ะทั้ง 6 ค่า สงสัยว่าเป็นการ copy label จาก sample ก่อนหน้ามาใส่ผิดพลาด **ยังไม่ได้ confirm กับทีมเก็บข้อมูล**
+- **Source field ไม่สม่ำเสมอหนัก**: 76 unique strings พบกลุ่ม typo/spacing variant ชัดเจนหลายกลุ่ม (เช่น `JOB24 mm` vs `JOB 24 mm.` vs `JOB24 mm"`, สระ/วรรณยุกต์พิมพ์ซ้ำอย่าง `คุ้้งเขาเขียว`) — ไม่กระทบการ train โดยตรงแต่ลด source-diversity ที่แท้จริงต่อ fold ใน `make_splits.py`
+
+### 3. Production Ratio — Model A อัปเดตด้วยข้อมูลใหม่ (236 samples หลัง dedup)
+
+| Sieve | ASTM | Control | Mean (104s เดิม → 236s ใหม่) | In ASTM (เดิม → ใหม่) |
+|---|---|---|---|---|
+| Retain 3/4" | 25–45% | 35–43% | 12.0% → 11.1% | 6.7% → 6.8% |
+| Retain 1/2" | 20–35% | 29–35% | 46.7% → 44.3% | 18.3% → 25.4% |
+| Retain 3/8" | 20–55% | 25–33% | 20.2% → 20.9% | 55.8% → 60.6% |
+| ผ่านครบทั้ง 3 sieve ใน ASTM | | | 0% → 0% | |
+
+ค่าเฉลี่ยเสถียรมากแม้ data เพิ่มขึ้น 2 เท่ากว่า — ยืนยันว่า retain 3/4" ต่ำกว่า ASTM มาก (ผลิตหินเม็ดใหญ่น้อยไป) เป็น pattern จริงของตลาด ไม่ใช่ sample ผิดปกติ
+
+**Model B:** ยังคำนวณไม่ได้ — ต้องรอ ASTM C33 size class + internal Control range สำหรับ No4/No8 จาก user (ถามไปแล้ว ยังไม่ได้คำตอบ)
+
+### 4. K-Fold Cross-Validation (แทน single train/val/test split)
+
+**เหตุผล:** val set เดิมเล็กเกินไป (Model A ~27 samples, Model B ~14) ทำให้ metric แกว่งสูง แยกไม่ออกว่าการเปลี่ยนแปลงช่วยจริงหรือ noise — ตรงกับ TODO ที่ตั้งไว้ตั้งแต่ Session 3
+
+**Design:** เก็บ test set (10%) แยกไว้ไม่แตะเหมือนเดิม + แบ่ง train/val pool (90%) เป็น 5 fold แทน single split
+
+- `make_splits.py`: เปลี่ยนโครงสร้าง `splits.json` จาก `{train,val,test}` เป็น `{test, folds: [[...]×5]}` — เจอ bug ตอนแรกที่ round-robin แบ่ง fold เริ่ม index 0 ทุก source group ทำให้ fold แรกกอง sample เยอะเกิน (`[91,46,33,29,19]`) แก้โดยหมุน offset ต่อ source group ได้ผล `[45,41,46,42,44]`
+- `aggnet_dataset3.py`: แทนที่ `train()` ด้วย `_train_two_phase()` (two-phase training regime เดิม แต่ reusable ทั้งแบบมี val set ปกติ และแบบไม่มี val สำหรับ final retrain) + `train_kfold()` (วน 5 fold → aggregate mean±std → retrain final model บน full pool ด้วย epoch budget = median ของ best epoch จากแต่ละ fold → evaluate บน test set **ครั้งเดียว**) — บันทึกโมเดลสุดท้ายชื่อไฟล์เดิม (`aggnet_34_best.pth`/`aggnet_38_best.pth`) ไม่ต้องแก้ `app_aggnet_qc.py`
+- เพิ่ม `K_FOLDS = 5` ใน config
+- Local smoke test (`code/_smoke_test_kfold.py`, epoch สั้นมากบน RTX 3050 4.3GB ในเครื่อง) ยืนยัน fold loop + aggregation + final retrain + held-out test eval รันครบไม่ error ก่อน push ไป train จริง
+
+**สถานะ:** เริ่ม train จริงบน Marimo A100 แล้ว (Model A → Model B → Model C skip) — **ยังไม่เสร็จ ณ เวลาบันทึก** รอผลเพื่อบันทึกเป็น Run 10 แยกต่างหาก
+
+### 5. เหตุการณ์ข้อมูลหายบน Marimo (บทเรียนสำคัญ)
+
+โฟลเดอร์ `/workspace/AggNet/data/dataset3` (รูปภาพ + labels.csv) **ถูกลบไปทั้งโฟลเดอร์** (user ลบเองระหว่างเตรียม sync ข้อมูลใหม่) — เพราะ path นี้ไม่ได้ track ผ่าน git (เฉพาะ `splits.json` เท่านั้นที่ track) การลบทำให้ข้อมูลดิบหายไปกับ session โดย git pull กู้คืนไม่ได้
+
+**แก้ปัญหา:** อัปโหลด `dataset3.7z` (362.7MB, 7z ไม่ใช่ zip) ผ่าน Marimo File Manager → ติดตั้ง `p7zip-full` (ไม่มีมาให้ default, `apt-get update` ก่อนถึงจะเจอ package) → แตกไฟล์ (เจอ nested `dataset3/` อีกชั้นเหมือนเคย ต้อง merge เข้า path จริงแทนแตกตรง) → ยืนยันจำนวนตรงกับ local (346 labels.csv, 344/345 ภาพ — ขาด Sample_330 ตรงกับที่รู้อยู่แล้ว)
+
+**บทเรียน:** ข้อมูลดิบใน `data/` บน Marimo **ไม่มี safety net ใดๆ** ถ้าถูกลบ (ไม่อยู่ใน git, ไม่มี auto-backup) — ควรเก็บ zip/7z ต้นฉบับไว้ใน "My Files" เสมอเป็น backup ขั้นต่ำ ไม่ควรลบทิ้งจนกว่าจะยืนยันว่า sync สำเร็จแล้วจริง
+
+### TODO ที่เพิ่มจาก session นี้
+- [ ] รอผล k-fold training จบ (Model A + B) แล้วบันทึกเป็น Run 10
+- [ ] Confirm กับทีมเก็บข้อมูลว่า 4 sample ที่ label ซ้ำใหม่ (240,259,344,345) เป็นของจริงที่กรอกผิด หรือ sample ที่ไม่มีอยู่จริง
+- [ ] หาไฟล์ภาพ `Sample_330` หรือลบ row นี้ออกจาก labels.csv ถ้าหาไม่เจอ
+- [ ] ขอ ASTM C33 size class + Control range ของ Model B (No4/No8) จาก user เพื่อทำ Production Ratio analysis ให้ครบ
+- [ ] พิจารณา normalize ชื่อ Source ที่เป็น typo/spacing variant เดียวกัน (76 unique strings มีซ้ำซ้อนเยอะ)
+- [ ] Revoke/regenerate GitHub PAT token (หลุดเป็น plain text ในบทสนทนาตอน push ครั้งก่อน)
+
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->
