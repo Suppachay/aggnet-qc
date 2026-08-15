@@ -85,6 +85,7 @@ NUM_SIEVES   = len(SIEVE_COLS_34)   # 6 (max)
 FREEZE_EPOCHS = 30    # Phase 1: freeze backbone, train head only
 LR_HEAD       = 3e-4  # Phase 1 LR (head only)
 LR_FINETUNE   = 2e-5  # Phase 2 LR (full fine-tune) — ต่ำลงเพื่อหยุด oscillation
+K_FOLDS       = 5     # k-fold CV on the train+val pool (test set stays held out)
 
 # ── Weight normalization ──
 # normalize weight_g เป็น 0-1 โดย assume range 400–900g
@@ -635,121 +636,26 @@ def evaluate(model, loader, criterion):
 # ─────────────────────────────────────────────
 # 6.  TRAINING LOOP
 # ─────────────────────────────────────────────
-def train(agg_filter=None):
+def _train_two_phase(model, train_loader, train_ds, criterion, model_save_path,
+                      val_loader=None, fixed_p2_epochs=None, log_prefix=""):
     """
-    agg_filter: None = train ทุก sample (ไม่แนะนำ)
-                '3_4inch' = train เฉพาะ Aggregate 3_4inch
-                '3_8inch' = train เฉพาะ Aggregate 3_8inch
+    Two-phase training (Phase 1: freeze backbone; Phase 2: partial unfreeze).
+
+    val_loader=None + fixed_p2_epochs=N  -> no validation available (used for
+        the final retrain on the full pool): trains Phase 2 for exactly N
+        epochs, no early stopping, saves weights at the end.
+    val_loader given -> normal early-stopping Phase 2 up to MAX_EPOCHS /
+        PATIENCE (used for per-fold training), saves the best-val-loss
+        checkpoint.
+
+    Returns: history, best_val_loss (None if val_loader is None), best_epoch, best_weights
     """
-    tag = agg_filter.replace('Aggregate ', '').replace('inch', '"') if agg_filter else 'ALL'
-    print("\n" + "="*60)
-    print(f"  AggNet Single Image  [{tag}]  (ASTM C 136)")
-    print("="*60)
+    history = {'train_loss': [], 'val_loss': [], 'val_mae': [], 'lr': [], 'phase': []}
 
-    # เลือก sieve columns ตาม agg_filter
-    if agg_filter == 'Aggregate 3_8inch':
-        sieve_cols   = SIEVE_COLS_38
-        sieve_labels = ['#4\n4.75', '#8\n2.36', 'Pan']
-        model_name   = "aggnet_38_best.pth"
-    elif agg_filter == 'Aggregate 1 inch':
-        sieve_cols   = SIEVE_COLS_1INCH
-        sieve_labels = SIEVE_LABELS   # 3/4"~Pan (1"≈100% ตัดออกเหมือนกัน)
-        model_name   = "aggnet_1inch_best.pth"
-    else:
-        sieve_cols   = SIEVE_COLS_34
-        sieve_labels = SIEVE_LABELS
-        model_name   = "aggnet_34_best.pth"
-    n_sieves = len(sieve_cols)
-
-    print(f"\n[1] Loading dataset from splits.json ...")
-
-    # Determine model key for splits.json
-    if agg_filter == 'Aggregate 3_8inch':
-        split_key = 'model_b'
-    elif agg_filter == 'Aggregate 1 inch':
-        split_key = 'model_c'
-    else:
-        split_key = 'model_a'
-
-    # Load split IDs
-    if not os.path.exists(SPLITS_JSON):
-        print(f"[ERROR] splits.json not found: {SPLITS_JSON}")
-        return None, None
-
-    splits_data = json.load(open(SPLITS_JSON))
-    if split_key not in splits_data:
-        print(f"\n  [SKIP] {split_key} not in splits.json → ข้ามการ train")
-        return None, None
-
-    train_ids = splits_data[split_key]['train']
-    val_ids   = splits_data[split_key]['val']
-    test_ids  = splits_data[split_key]['test']
-
-    if len(train_ids) < 3:
-        print(f"\n  [SKIP] {agg_filter} train set มีเพียง {len(train_ids)} sample(s) → รอเพิ่มข้อมูล")
-        return None, None
-
-    train_rec = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=train_ids)
-    val_rec   = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=val_ids)
-    test_rec  = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=test_ids)
-    print(f"    Train: {len(train_rec)}  |  Val: {len(val_rec)}  |  Test: {len(test_rec)} (held out)")
-
-    train_ds = AggDatasetMT(train_rec, transform=get_transforms(True),  sieve_cols=sieve_cols)
-    val_ds   = AggDatasetMT(val_rec,   transform=get_transforms(False), sieve_cols=sieve_cols)
-    test_ds  = AggDatasetMT(test_rec,  transform=get_transforms(False), sieve_cols=sieve_cols)
-
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE,
-                              shuffle=True,  num_workers=0, pin_memory=False)
-    val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE,
-                              shuffle=False, num_workers=0, pin_memory=False)
-    test_loader  = DataLoader(test_ds,  batch_size=BATCH_SIZE,
-                              shuffle=False, num_workers=0, pin_memory=False)
-
-    use_multitask = (n_sieves >= 3 and '3_4inch' in sieve_cols)
-    print(f"\n[2] Building EfficientNet-B0 + CBAM + {'Multi-Task' if use_multitask else 'Single-Task'} ...")
-    model = EfficientNetAggNet(num_sieves=n_sieves, multitask=use_multitask).to(DEVICE)
-    model.head_passing.apply(init_weights)
-    model.cbam.apply(init_weights)
-    if use_multitask:
-        model.head_gradation.apply(init_weights)
-        model.head_production.apply(init_weights)
-
-    total_params_all  = sum(p.numel() for p in model.parameters())
-    head_params = sum(p.numel() for p in model.head_passing.parameters())
-    cbam_params = sum(p.numel() for p in model.cbam.parameters())
-    mt_params   = 0
-    if use_multitask:
-        mt_params = (sum(p.numel() for p in model.head_gradation.parameters())
-                   + sum(p.numel() for p in model.head_production.parameters()))
-    print(f"    Total parameters     : {total_params_all:,}")
-    print(f"    CBAM parameters      : {cbam_params:,}")
-    print(f"    Head (passing)       : {head_params:,}")
-    if use_multitask:
-        print(f"    Head (grad+prod)     : {mt_params:,}")
-    print(f"    Multi-task           : {use_multitask}")
-    print(f"    Input : image (batch,3,{IMG_SIZE[0]},{IMG_SIZE[1]}) + [weight_norm, agg_code] (batch,2)")
-    print(f"    Output: (batch, {n_sieves})  sieves: {sieve_cols}")
-
-    criterion = MultiTaskLoss(mono_weight=0.5, w_grad=0.3, w_prod=0.3) if use_multitask else MonotonicMSELoss(mono_weight=0.5)
-    model_save_path = os.path.join(MODEL_DIR, model_name)
-
-    # ── Phase 1: Freeze backbone, train head only ──
-    print(f"\n[3a] Phase 1 — Freeze backbone, train head ({FREEZE_EPOCHS} epochs, LR={LR_HEAD}) ...")
-    model.freeze_backbone()
-    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
-                            lr=LR_HEAD, weight_decay=WEIGHT_DECAY)
-    scheduler_cos     = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=FREEZE_EPOCHS, eta_min=LR_MIN)
-    scheduler_plateau = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-                            factor=LR_FACTOR, patience=10, min_lr=LR_MIN)
-
-    best_val_loss = float('inf')
-    best_weights  = None
-    history       = {'train_loss': [], 'val_loss': [], 'val_mae': [], 'lr': [], 'phase': []}
-
-    def _train_one_epoch(loader, ds_len):
+    def _train_one_epoch(optimizer):
         model.train()
         running_loss = 0.0
-        for batch in loader:
+        for batch in train_loader:
             imgs     = batch[0].to(DEVICE)
             scalars  = batch[1].to(DEVICE)
             targets  = batch[2].to(DEVICE)
@@ -770,147 +676,246 @@ def train(agg_filter=None):
             loss.backward()
             optimizer.step()
             running_loss += loss.item() * imgs.size(0)
-        return running_loss / ds_len
+        return running_loss / len(train_ds)
+
+    best_val_loss = float('inf') if val_loader is not None else None
+    best_weights  = None
+    best_epoch    = 0
+
+    # ── Phase 1: Freeze backbone, train head only ──
+    model.freeze_backbone()
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+                            lr=LR_HEAD, weight_decay=WEIGHT_DECAY)
+    scheduler_cos     = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=FREEZE_EPOCHS, eta_min=LR_MIN)
+    scheduler_plateau = (optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+                            factor=LR_FACTOR, patience=10, min_lr=LR_MIN)
+                         if val_loader is not None else None)
 
     for epoch in range(1, FREEZE_EPOCHS + 1):
-        train_loss = _train_one_epoch(train_loader, len(train_ds))
-        val_loss, val_mae, _, _ = evaluate(model, val_loader, criterion)
-        scheduler_cos.step()
-        scheduler_plateau.step(val_loss)
+        train_loss = _train_one_epoch(optimizer)
         current_lr = optimizer.param_groups[0]['lr']
-
         history['train_loss'].append(train_loss)
-        history['val_loss'].append(val_loss)
-        history['val_mae'].append(val_mae)
         history['lr'].append(current_lr)
         history['phase'].append(1)
 
-        print(f"[P1] Epoch [{epoch:>3}/{FREEZE_EPOCHS}]  "
-              f"Train: {train_loss:.5f}  Val: {val_loss:.5f}  MAE: {val_mae:.2f}%  LR: {current_lr:.2e}")
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_weights  = copy.deepcopy(model.state_dict())
-            torch.save(best_weights, model_save_path)
-            print(f"    ✓ Saved (Val Loss: {best_val_loss:.5f})")
+        if val_loader is not None:
+            val_loss, val_mae, _, _ = evaluate(model, val_loader, criterion)
+            scheduler_plateau.step(val_loss)
+            history['val_loss'].append(val_loss)
+            history['val_mae'].append(val_mae)
+            print(f"{log_prefix}[P1] Epoch [{epoch:>3}/{FREEZE_EPOCHS}]  "
+                  f"Train: {train_loss:.5f}  Val: {val_loss:.5f}  MAE: {val_mae:.2f}%  LR: {current_lr:.2e}")
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_weights  = copy.deepcopy(model.state_dict())
+                best_epoch    = epoch
+                torch.save(best_weights, model_save_path)
+                print(f"{log_prefix}    ✓ Saved (Val Loss: {best_val_loss:.5f})")
+        else:
+            print(f"{log_prefix}[P1] Epoch [{epoch:>3}/{FREEZE_EPOCHS}]  Train: {train_loss:.5f}  LR: {current_lr:.2e}")
+        scheduler_cos.step()
 
     # ── Phase 2: Unfreeze last 2 blocks, fine-tune ──
-    print(f"\n[3b] Phase 2 — Partial unfreeze (last 2 blocks), fine-tune (up to {MAX_EPOCHS} epochs, LR={LR_FINETUNE}) ...")
     model.unfreeze_last_n_blocks(n=2)
-    trainable_p2 = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"    Trainable params (Phase 2): {trainable_p2:,}  (last 2 EfficientNet blocks + CBAM + heads)")
     optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
                             lr=LR_FINETUNE, weight_decay=WEIGHT_DECAY)
-    scheduler_cos     = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=MAX_EPOCHS, eta_min=LR_MIN)
-    scheduler_plateau = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+    p2_epochs = fixed_p2_epochs if fixed_p2_epochs is not None else MAX_EPOCHS
+    scheduler_cos     = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=p2_epochs, eta_min=LR_MIN)
+    scheduler_plateau = (optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
                             factor=LR_FACTOR, patience=LR_PATIENCE, min_lr=LR_MIN)
+                         if val_loader is not None else None)
 
     no_improve = 0
-    for epoch in range(1, MAX_EPOCHS + 1):
-        train_loss = _train_one_epoch(train_loader, len(train_ds))
-        val_loss, val_mae, _, _ = evaluate(model, val_loader, criterion)
-        scheduler_cos.step()
-        scheduler_plateau.step(val_loss)
+    for epoch in range(1, p2_epochs + 1):
+        train_loss = _train_one_epoch(optimizer)
         current_lr = optimizer.param_groups[0]['lr']
-
         history['train_loss'].append(train_loss)
-        history['val_loss'].append(val_loss)
-        history['val_mae'].append(val_mae)
         history['lr'].append(current_lr)
         history['phase'].append(2)
 
-        print(f"[P2] Epoch [{epoch:>3}/{MAX_EPOCHS}]  "
-              f"Train: {train_loss:.5f}  Val: {val_loss:.5f}  MAE: {val_mae:.2f}%  LR: {current_lr:.2e}")
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_weights  = copy.deepcopy(model.state_dict())
-            no_improve    = 0
-            torch.save(best_weights, model_save_path)
-            print(f"    ✓ Saved (Val Loss: {best_val_loss:.5f})")
+        if val_loader is not None:
+            val_loss, val_mae, _, _ = evaluate(model, val_loader, criterion)
+            scheduler_plateau.step(val_loss)
+            history['val_loss'].append(val_loss)
+            history['val_mae'].append(val_mae)
+            print(f"{log_prefix}[P2] Epoch [{epoch:>3}/{p2_epochs}]  "
+                  f"Train: {train_loss:.5f}  Val: {val_loss:.5f}  MAE: {val_mae:.2f}%  LR: {current_lr:.2e}")
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_weights  = copy.deepcopy(model.state_dict())
+                best_epoch    = FREEZE_EPOCHS + epoch
+                no_improve    = 0
+                torch.save(best_weights, model_save_path)
+                print(f"{log_prefix}    ✓ Saved (Val Loss: {best_val_loss:.5f})")
+            else:
+                no_improve += 1
+                if fixed_p2_epochs is None and no_improve >= PATIENCE:
+                    print(f"{log_prefix}\n  Early stopping at epoch {FREEZE_EPOCHS + epoch}")
+                    break
         else:
-            no_improve += 1
-            if no_improve >= PATIENCE:
-                print(f"\n  Early stopping at epoch {FREEZE_EPOCHS + epoch}")
-                break
+            print(f"{log_prefix}[P2-final] Epoch [{epoch:>3}/{p2_epochs}]  Train: {train_loss:.5f}  LR: {current_lr:.2e}")
+        scheduler_cos.step()
 
-    model.load_state_dict(best_weights)
-    print(f"\n  Best Val Loss: {best_val_loss:.5f}")
+    if val_loader is None:
+        # no validation set (final retrain on full pool) — the last epoch's
+        # weights ARE the model, there's nothing to compare against
+        best_weights = copy.deepcopy(model.state_dict())
+        torch.save(best_weights, model_save_path)
+        best_epoch = FREEZE_EPOCHS + p2_epochs
 
-    print("\n[4] Final Evaluation ...")
-    val_loss, val_mae, val_preds, val_targets = evaluate(
-        model, val_loader, criterion)
+    return history, best_val_loss, best_epoch, best_weights
 
-    # คำนวณ 3 metrics
-    mae, per_sieve_acc, sample_acc, r2_avg, r2_per = compute_metrics(val_preds, val_targets, tolerance=10.0)
+
+def train_kfold(agg_filter=None, k=K_FOLDS):
+    """
+    K-fold CV on the train+val pool (splits.json 'folds') for a reliable
+    validation metric, then a final model retrained on the FULL pool and
+    evaluated once on the held-out 'test' set (never touched until here).
+
+    agg_filter: None = ทุก sample (ไม่แนะนำ) | 'Aggregate 3_4inch' | 'Aggregate 3_8inch' | 'Aggregate 1 inch'
+    """
+    tag = agg_filter.replace('Aggregate ', '').replace('inch', '"') if agg_filter else 'ALL'
+    print("\n" + "="*60)
+    print(f"  AggNet {k}-Fold CV  [{tag}]  (ASTM C 136)")
+    print("="*60)
+
+    if agg_filter == 'Aggregate 3_8inch':
+        sieve_cols, sieve_labels = SIEVE_COLS_38, ['#4\n4.75', '#8\n2.36', 'Pan']
+        model_name, split_key = "aggnet_38_best.pth", 'model_b'
+    elif agg_filter == 'Aggregate 1 inch':
+        sieve_cols, sieve_labels = SIEVE_COLS_1INCH, SIEVE_LABELS
+        model_name, split_key = "aggnet_1inch_best.pth", 'model_c'
+    else:
+        sieve_cols, sieve_labels = SIEVE_COLS_34, SIEVE_LABELS
+        model_name, split_key = "aggnet_34_best.pth", 'model_a'
+    n_sieves = len(sieve_cols)
+    use_multitask = (n_sieves >= 3 and '3_4inch' in sieve_cols)
+
+    print(f"\n[1] Loading dataset from splits.json ...")
+    if not os.path.exists(SPLITS_JSON):
+        print(f"[ERROR] splits.json not found: {SPLITS_JSON}")
+        return None
+    splits_data = json.load(open(SPLITS_JSON))
+    if split_key not in splits_data:
+        print(f"\n  [SKIP] {split_key} not in splits.json → ข้ามการ train")
+        return None
+
+    test_ids = splits_data[split_key]['test']
+    folds    = splits_data[split_key]['folds']
+    pool_ids = [sid for f in folds for sid in f]
+
+    if len(pool_ids) < k + 2:
+        print(f"\n  [SKIP] {agg_filter} pool มีเพียง {len(pool_ids)} sample(s) → รอเพิ่มข้อมูล")
+        return None
+
+    test_rec    = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=test_ids)
+    test_ds     = AggDatasetMT(test_rec, transform=get_transforms(False), sieve_cols=sieve_cols)
+    test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=False)
+    print(f"    Pool: {len(pool_ids)} samples across {k} folds {[len(f) for f in folds]}  |  Test (held out): {len(test_rec)}")
+
+    criterion = MultiTaskLoss(mono_weight=0.5, w_grad=0.3, w_prod=0.3) if use_multitask else MonotonicMSELoss(mono_weight=0.5)
+
+    print(f"\n[2] Building EfficientNet-B0 + CBAM + {'Multi-Task' if use_multitask else 'Single-Task'} "
+          f"(fresh model per fold)")
+
+    def _new_model():
+        m = EfficientNetAggNet(num_sieves=n_sieves, multitask=use_multitask).to(DEVICE)
+        m.head_passing.apply(init_weights)
+        m.cbam.apply(init_weights)
+        if use_multitask:
+            m.head_gradation.apply(init_weights)
+            m.head_production.apply(init_weights)
+        return m
+
+    # ── Per-fold training ──
+    fold_metrics, fold_best_epochs = [], []
+    for i in range(k):
+        if len(folds[i]) == 0:
+            continue
+        val_ids   = folds[i]
+        train_ids = [sid for j, f in enumerate(folds) if j != i for sid in f]
+        print(f"\n--- Fold {i+1}/{k}  (train={len(train_ids)}  val={len(val_ids)}) ---")
+
+        train_rec = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=train_ids)
+        val_rec   = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=val_ids)
+        train_ds  = AggDatasetMT(train_rec, transform=get_transforms(True),  sieve_cols=sieve_cols)
+        val_ds    = AggDatasetMT(val_rec,   transform=get_transforms(False), sieve_cols=sieve_cols)
+        train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,  num_workers=0, pin_memory=False)
+        val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=False)
+
+        model = _new_model()
+        fold_model_path = os.path.join(MODEL_DIR, model_name.replace('.pth', f'_fold{i}.pth'))
+        history, best_val_loss, best_epoch, best_weights = _train_two_phase(
+            model, train_loader, train_ds, criterion, fold_model_path,
+            val_loader=val_loader, log_prefix=f"  [fold{i}] ")
+
+        model.load_state_dict(best_weights)
+        _, _, val_preds, val_targets = evaluate(model, val_loader, criterion)
+        mae, ps_acc, s_acc, r2_avg, r2_per = compute_metrics(val_preds, val_targets, tolerance=10.0)
+        fold_metrics.append(dict(mae=mae, ps_acc=ps_acc, s_acc=s_acc, r2=r2_avg, val_loss=best_val_loss))
+        fold_best_epochs.append(best_epoch)
+        print(f"  Fold {i+1} result: MAE={mae:.2f}%  R²={r2_avg:.4f}  "
+              f"PerSieveAcc={ps_acc:.1f}%  SampleAcc={s_acc:.1f}%  (best epoch {best_epoch})")
+
+    # ── Aggregate CV metrics (the reliable estimate) ──
+    print("\n" + "="*65)
+    print(f"  {len(fold_metrics)}-Fold CV Summary  [{tag}]")
+    print("="*65)
+    for key, label in [('mae', 'MAE (%)'), ('r2', 'R²'), ('ps_acc', 'Per-sieve Acc (%)'), ('s_acc', 'Sample Acc (%)')]:
+        vals = [m[key] for m in fold_metrics]
+        print(f"  {label:<20}: {np.mean(vals):.3f} ± {np.std(vals):.3f}   "
+              f"(per-fold: {[round(v, 2) for v in vals]})")
+
+    # ── Final retrain on the FULL pool (all folds combined, no internal val) ──
+    final_p2_epochs = max(int(round(float(np.median(fold_best_epochs)))) - FREEZE_EPOCHS, 10)
+    print(f"\n[3] Final retrain on full pool ({len(pool_ids)} samples) — "
+          f"Phase 2 epochs = median across folds = {final_p2_epochs}")
+
+    pool_rec    = load_records(DATA_DIR, LABELS_CSV, sieve_cols=sieve_cols, sample_ids=pool_ids)
+    pool_ds     = AggDatasetMT(pool_rec, transform=get_transforms(True), sieve_cols=sieve_cols)
+    pool_loader = DataLoader(pool_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=False)
+
+    final_model = _new_model()
+    final_model_path = os.path.join(MODEL_DIR, model_name)
+    final_history, _, _, final_weights = _train_two_phase(
+        final_model, pool_loader, pool_ds, criterion, final_model_path,
+        val_loader=None, fixed_p2_epochs=final_p2_epochs, log_prefix="  [final] ")
+    final_model.load_state_dict(final_weights)
+
+    # ── Evaluate final model on the held-out test set (first time it's used) ──
+    print("\n[4] Held-out TEST set evaluation (final model — never seen during CV or final retrain) ...")
+    _, _, test_preds, test_targets = evaluate(final_model, test_loader, criterion)
+    t_mae, t_ps_acc, t_s_acc, t_r2, t_r2_per = compute_metrics(test_preds, test_targets, tolerance=10.0)
 
     print("\n" + "="*65)
-    print("  Model Performance Summary")
+    print("  TEST SET Performance (final model)")
     print("="*65)
-    print(f"  MAE (avg)                    : {mae:.2f}%")
-    print(f"  Per-sieve Accuracy  (±10%)   : {per_sieve_acc:.1f}%  ← % cell ที่ error ≤ 10%")
-    print(f"  Sample Accuracy     (±10%)   : {sample_acc:.1f}%  ← % sample ที่ผ่านทุกตะแกรง (QC)")
-    print(f"  R² Score (3/4\"~3/8\" only)   : {r2_avg:.4f}")
+    print(f"  MAE (avg)                    : {t_mae:.2f}%")
+    print(f"  Per-sieve Accuracy  (±10%)   : {t_ps_acc:.1f}%")
+    print(f"  Sample Accuracy     (±10%)   : {t_s_acc:.1f}%")
+    print(f"  R² Score (3/4\"~3/8\" only)   : {t_r2:.4f}")
     print("="*65)
 
-    mae_per_sieve = (val_preds - val_targets).abs().mean(dim=0).numpy() * 100
-    r2_arr        = np.array(r2_per)
-
-    print("\n  Metrics per sieve:")
-    print(f"  {'Sieve':>12}  {'MAE':>7}  {'R²':>7}  {'Per-sieve Acc':>14}  {'Note'}")
-    print("  " + "-"*60)
+    t_mae_arr = (test_preds - test_targets).abs().mean(dim=0).numpy() * 100
+    t_r2_arr  = np.array(t_r2_per)
+    print(f"\n  {'Sieve':>12}  {'MAE':>7}  {'R²':>7}  {'Acc(±10%)':>10}")
+    print("  " + "-"*45)
     for i, label in enumerate(sieve_labels):
-        lbl      = label.replace('\n', ' ')
-        err_s    = (val_preds[:, i] - val_targets[:, i]).abs() * 100
-        acc_s    = (err_s <= 10.0).float().mean().item() * 100
-        r2_str   = f"{r2_arr[i]:.3f}" if not np.isnan(r2_arr[i]) else "  N/A"
-        note     = "" if i < 3 else "(low variance)"
-        print(f"  {lbl:>12}  {mae_per_sieve[i]:>6.2f}%  {r2_str:>7}  {acc_s:>13.1f}%  {note}")
+        lbl    = label.replace('\n', ' ')
+        r2_str = f"{t_r2_arr[i]:.3f}" if not np.isnan(t_r2_arr[i]) else "  N/A"
+        err_s  = (test_preds[:, i] - test_targets[:, i]).abs() * 100
+        acc_s  = (err_s <= 10.0).float().mean().item() * 100
+        print(f"  {lbl:>12}  {t_mae_arr[i]:>6.2f}%  {r2_str:>7}  {acc_s:>9.1f}%")
 
     tag_short = tag.replace('/', '').replace('"', '')
-    plot_history(history, suffix=tag_short)
-    plot_gradation_curves(val_preds, val_targets, val_rec, sieve_labels=sieve_labels,
-                          suffix='val')
-    plot_metrics_summary(val_preds, val_targets, sieve_labels=sieve_labels,
-                         suffix='val')
+    plot_history(final_history, suffix=f'{tag_short}_final')
+    plot_gradation_curves(test_preds, test_targets, test_rec, sieve_labels=sieve_labels, suffix='test')
+    plot_metrics_summary(test_preds, test_targets, sieve_labels=sieve_labels, suffix='test')
 
-    # ── Test Set Evaluation (held out) ──
-    if len(test_rec) > 0:
-        print("\n[5] Test Set Evaluation (held out — never seen during training) ...")
-        test_loss, test_mae_avg, test_preds, test_targets = evaluate(
-            model, test_loader, criterion)
-
-        t_mae, t_ps_acc, t_s_acc, t_r2, t_r2_per = compute_metrics(
-            test_preds, test_targets, tolerance=10.0)
-
-        print("\n" + "="*65)
-        print("  TEST SET Performance")
-        print("="*65)
-        print(f"  MAE (avg)                    : {t_mae:.2f}%")
-        print(f"  Per-sieve Accuracy  (±10%)   : {t_ps_acc:.1f}%")
-        print(f"  Sample Accuracy     (±10%)   : {t_s_acc:.1f}%")
-        print(f"  R² Score (3/4\"~3/8\" only)   : {t_r2:.4f}")
-        print("="*65)
-
-        t_mae_arr = (test_preds - test_targets).abs().mean(dim=0).numpy() * 100
-        t_r2_arr  = np.array(t_r2_per)
-        print(f"\n  {'Sieve':>12}  {'MAE':>7}  {'R²':>7}  {'Acc(±10%)':>10}")
-        print("  " + "-"*45)
-        for i, label in enumerate(sieve_labels):
-            lbl    = label.replace('\n', ' ')
-            err_s  = (test_preds[:, i] - test_targets[:, i]).abs() * 100
-            acc_s  = (err_s <= 10.0).float().mean().item() * 100
-            r2_str = f"{t_r2_arr[i]:.3f}" if not np.isnan(t_r2_arr[i]) else "  N/A"
-            print(f"  {lbl:>12}  {t_mae_arr[i]:>6.2f}%  {r2_str:>7}  {acc_s:>9.1f}%")
-
-        plot_gradation_curves(test_preds, test_targets, test_rec,
-                              sieve_labels=sieve_labels, suffix='test')
-        plot_metrics_summary(test_preds, test_targets, sieve_labels=sieve_labels,
-                             suffix='test')
-
-    print(f"\n[6] Model saved: {model_save_path}")
+    print(f"\n[5] Final model saved: {final_model_path}")
     print("    Done!")
-    return model, history
+    return dict(fold_metrics=fold_metrics, test_mae=t_mae, test_r2=t_r2,
+                test_ps_acc=t_ps_acc, test_s_acc=t_s_acc)
 
 
 # ─────────────────────────────────────────────
@@ -1182,19 +1187,19 @@ if __name__ == "__main__":
     print("\n" + "█"*60)
     print("  MODEL A: Aggregate 3/4\" (6 sieves)")
     print("█"*60)
-    model_34, history_34 = train(agg_filter='Aggregate 3_4inch')
+    result_34 = train_kfold(agg_filter='Aggregate 3_4inch')
 
     print("\n" + "█"*60)
     print("  MODEL B: Aggregate 3/8\" (3 sieves: No4/No8/Pan)")
     print("  หมายเหตุ: 3/4\"=0, 1/2\"=100, 3/8\"≈99.7 → constant ไม่ต้อง predict")
     print("█"*60)
-    model_38, history_38 = train(agg_filter='Aggregate 3_8inch')
+    result_38 = train_kfold(agg_filter='Aggregate 3_8inch')
 
     print("\n" + "█"*60)
     print("  MODEL C: Aggregate 1\" (6 sieves: 3/4\"~Pan)")
     print("  หมายเหตุ: 1\"≈100% constant ไม่ต้อง predict — skip อัตโนมัติถ้า sample < 4")
     print("█"*60)
-    model_1inch, history_1inch = train(agg_filter='Aggregate 1 inch')
+    result_1inch = train_kfold(agg_filter='Aggregate 1 inch')
 
     # ── Inference (uncomment แล้วใส่ path ภาพ) ──
     # result = predict(
