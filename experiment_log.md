@@ -888,11 +888,78 @@ Setup ปัจจุบัน (Flask dev server + cloudflared quick tunnel) เ
 **บทเรียน:** ข้อมูลดิบใน `data/` บน Marimo **ไม่มี safety net ใดๆ** ถ้าถูกลบ (ไม่อยู่ใน git, ไม่มี auto-backup) — ควรเก็บ zip/7z ต้นฉบับไว้ใน "My Files" เสมอเป็น backup ขั้นต่ำ ไม่ควรลบทิ้งจนกว่าจะยืนยันว่า sync สำเร็จแล้วจริง
 
 ### TODO ที่เพิ่มจาก session นี้
-- [ ] รอผล k-fold training จบ (Model A + B) แล้วบันทึกเป็น Run 10
+- [x] ~~รอผล k-fold training จบ (Model A + B) แล้วบันทึกเป็น Run 10~~ — เสร็จแล้ว ดูด้านล่าง
 - [ ] Confirm กับทีมเก็บข้อมูลว่า 4 sample ที่ label ซ้ำใหม่ (240,259,344,345) เป็นของจริงที่กรอกผิด หรือ sample ที่ไม่มีอยู่จริง
 - [ ] หาไฟล์ภาพ `Sample_330` หรือลบ row นี้ออกจาก labels.csv ถ้าหาไม่เจอ
 - [ ] ขอ ASTM C33 size class + Control range ของ Model B (No4/No8) จาก user เพื่อทำ Production Ratio analysis ให้ครบ
 - [ ] พิจารณา normalize ชื่อ Source ที่เป็น typo/spacing variant เดียวกัน (76 unique strings มีซ้ำซ้อนเยอะ)
 - [ ] Revoke/regenerate GitHub PAT token (หลุดเป็น plain text ในบทสนทนาตอน push ครั้งก่อน)
+
+---
+
+### Run 10 — 2026-08-16 (5-Fold CV, 339 samples, final model retrain บน full pool)
+
+**Script:** `train_kfold()` ใน `aggnet_dataset3.py` (ครั้งแรกที่ใช้ k-fold แทน single split)
+**Dataset:** 345 raw / 339 หลัง dedup — Model A pool 218 (test 18), Model B pool 93 (test 9)
+**Hardware:** NVIDIA A100-SXM4-80GB (RAILAB Marimo)
+
+#### Model A — Aggregate 3_4inch
+
+**5-Fold CV (mean ± std ข้าม 5 fold — ตัวเลขที่เชื่อถือได้กว่า single val):**
+
+| Metric | Mean ± Std | Per-fold |
+|---|---|---|
+| MAE | 5.68% ± 0.40 | 5.65, 6.25, 5.97, 5.41, 5.13 |
+| R² | 0.048 ± 0.10 | -0.10, 0.04, 0.03, 0.21, 0.06 |
+| Per-sieve Acc (±10%) | 77.5% ± 2.7 | 75.2, 76.0, 75.0, 80.1, 81.4 |
+| Sample Acc (±10%) | 29.6% ± 3.4 | 28.9, 29.3, 23.9, 31.7, 34.1 |
+
+Final retrain: Phase 2 epochs = 212 (median ของ best epoch จาก 5 fold) บน pool เต็ม 218 samples
+
+**Test set (held out, final model) — เทียบ Run 09:**
+
+| Metric | Run 09 (235s, single split) | **Run 10 (339s, k-fold)** |
+|---|---|---|
+| MAE | 7.58% | **5.18%** ✅ |
+| R² | -0.019 | **0.398** ✅✅ |
+| Per-sieve Acc | 66.7% | **77.8%** ✅ |
+| Sample Acc | 9.1% | **33.3%** ✅✅✅ |
+
+**Per-sieve (Test):**
+| Sieve | MAE | R² | Acc(±10%) |
+|---|---|---|---|
+| 3/4" | 7.14% | 0.137 | 72.2% |
+| **1/2"** | **9.80%** | **0.578** | 44.4% |
+| **3/8"** | **9.59%** | **0.481** | 61.1% |
+| #4 | 2.60% | -0.090 | 94.4% |
+| #8 | 1.47% | -0.176 | 94.4% |
+| Pan | 0.45% | N/A | 100.0% |
+
+🎯 **จุดที่สำคัญที่สุดของ Run 10:** 1/2" และ 3/8" (sieve ที่ยากที่สุด ค้าง MAE สูง/R² ติดลบมาตั้งแต่ Run 05) **ครั้งแรกที่มี R² เป็นบวกชัดเจน** (0.578 และ 0.481) — เป็นสัญญาณว่าโมเดลเริ่มจับ pattern ได้จริง ไม่ใช่แค่ทายค่าเฉลี่ย น่าจะมาจาก 2 ปัจจัยรวมกัน: (1) data เพิ่มจาก 235→339 samples (2) k-fold final retrain ใช้ pool เต็ม 218 samples train (มากกว่า single-split เดิมที่ train แค่ ~164)
+
+#### Model B — Aggregate 3_8inch
+
+**5-Fold CV:** MAE 3.56% ± 0.27 (per-fold: 3.14, 3.66, 3.88, 3.35, 3.74) | R² -0.203 ± 0.27 *(ไม่มีความหมาย — metric นี้คำนวณเฉพาะ 3/4"~3/8" ที่ Model B ไม่ predict)* | Per-sieve Acc 90.3% ± 2.0 | Sample Acc 71.9% ± 4.9
+
+Final retrain: Phase 2 epochs = 50 บน pool เต็ม 93 samples
+
+**Test set:** MAE 3.18% | Per-sieve Acc 92.6% | Sample Acc 77.8% | R² -1.0 (ไม่มีความหมายเหมือนกัน)
+
+**Per-sieve (Test):** #4 6.80% (Acc 77.8%) · #8 1.36% (Acc 100%) · Pan 1.40% (Acc 100%)
+
+⚠️ **เทียบ Run 09 (MAE 2.31%) ดูเหมือนแย่ลง (3.18%) แต่ตีความผิดได้ง่าย:** Run 09 test มีแค่ **6 samples** — เล็กเกินจะเชื่อถือได้ ตอนนี้มี **CV mean 3.56%±0.27% จาก 93 samples** ซึ่งน่าเชื่อถือกว่ามาก ตัวเลข 2.31% เดิมน่าจะเป็นแค่ variance จาก test set เล็ก ไม่ใช่ signal จริงที่โมเดลแย่ลง — **นี่คือประโยชน์ตรงๆ ของการทำ k-fold** ที่ตั้งใจไว้ตั้งแต่ Session 5
+
+#### Model C — Aggregate 1 inch
+Skip อัตโนมัติเหมือนเดิม (pool = 1 sample < K_FOLDS+2 = 7)
+
+#### สรุป Run 10
+- Model A ดีขึ้นในทุก metric ที่เทียบได้ (MAE, R², ทั้ง Per-sieve และ Sample Accuracy) — **1/2"/3/8" มี R² เป็นบวกครั้งแรก**
+- Model B ตัวเลข test แกว่ง (เพราะ test เดิมเล็กเกินไป) แต่ CV metric ที่เชื่อถือได้กว่าบอกว่า performance อยู่ในระดับใกล้เคียงเดิม (MAE ~3.5%, Sample Acc ~72-78%)
+- ยืนยันคุณค่าของ k-fold: เผยว่า Run 09's Model B "ดูดี" (2.31%) อาจเป็นแค่โชคจาก test set เล็ก
+
+**ขั้นตอนถัดไป:**
+- [ ] เช็คว่า 1/2"/3/8" ที่ดีขึ้นคงอยู่ต่อไหมเมื่อเพิ่ม data รอบหน้า (ยืนยันว่าไม่ใช่ fluke)
+- [ ] อัปเดต Web App ให้แน่ใจว่าใช้ model จาก Run 10 (`aggnet_34_best.pth`, `aggnet_38_best.pth` ถูก overwrite แล้วอัตโนมัติ)
+- [ ] พิจารณาทำ k-fold ให้ Model C ด้วยเมื่อมีข้อมูล ≥7 samples
 
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->
