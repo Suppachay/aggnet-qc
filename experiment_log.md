@@ -962,4 +962,41 @@ Skip อัตโนมัติเหมือนเดิม (pool = 1 sample 
 - [ ] อัปเดต Web App ให้แน่ใจว่าใช้ model จาก Run 10 (`aggnet_34_best.pth`, `aggnet_38_best.pth` ถูก overwrite แล้วอัตโนมัติ)
 - [ ] พิจารณาทำ k-fold ให้ Model C ด้วยเมื่อมีข้อมูล ≥7 samples
 
+---
+
+## Session 6 — 2026-09-02 ~ 2026-09-10 (Marimo session restart + Notebook cleanup)
+
+### 1. Session restart (2026-09-02) — ต้อง deploy ใหม่ทั้งหมด
+
+Marimo session ถูก restart (สาเหตุไม่ทราบแน่ชัด — อาจเป็น platform idle timeout) ทำให้ package ที่เคย `pip install` ไว้ (flask, reportlab) หายไปหมด และ process เดิม (web app, cloudflared tunnel) ตายทั้งคู่ ต้อง deploy ใหม่ตั้งแต่ต้น:
+1. `./cloudflared tunnel login` → ใหม่ (cert.pem หาย ต้อง login ใหม่ผ่าน browser)
+2. `./cloudflared tunnel create aggnet` + `tunnel route dns aggnet app.aggnet-qc.com` → สร้าง tunnel/DNS ใหม่ (tunnel เดิมหายไปพร้อม session)
+3. `pip install flask reportlab` ใหม่
+4. เปิดเว็บแอป + tunnel ใหม่
+
+**บั๊กที่เจอระหว่างทาง:** ครั้งแรกที่รัน `./cloudflared tunnel run aggnet` (ไม่ใส่ `--url`) ได้ 503 "No ingress rules were defined" — ต้องใส่ `--url http://localhost:5000` ต่อท้ายเสมอ (จุดนี้เคยพลาดมาก่อนแล้วครั้งนึง ดู skill.md) แก้โดย `pkill -f 'cloudflared tunnel run'` แล้ว relaunch ด้วยคำสั่งที่มี `--url` ครบ
+
+### 2. Notebook cleanup (2026-09-10)
+
+`notebook.py` บน Marimo สะสม cell เก่าจากการ debug/setup/restart หลายรอบมาตลอดโปรเจค (นับแล้วกว่า 65-70% ของ cell ทั้งหมดเป็น diagnostic/duplicate/setup ที่ทำเสร็จไปแล้ว) — ไล่ลบทีละกลุ่มเล็กๆ พร้อมเช็ค PID ของ process จริง (`app_aggnet_qc.py` PID 415, `cloudflared tunnel run --url ... aggnet` PID 1128) ก่อน-หลังทุกรอบเพื่อยืนยันว่าเว็บแอปที่รันอยู่จริงไม่กระทบ
+
+**หมายเหตุสำคัญ:** `notebook.py` **ไม่ track ผ่าน git** (ต่างจาก `code/*.py`) — ก่อนลบต้อง `cp notebook.py notebook_backup_$(date).py` ไว้ก่อนเสมอ ไม่มี safety net อื่น (บทเรียนเดียวกับเหตุการณ์ข้อมูลหาย Session 5)
+
+**สิ่งที่ลบทิ้งไปทั้งหมด:** welcome markdown เริ่มต้น, GPU check เดี่ยว, แนวทาง AggNet.zip เดิม (เลิกใช้ เปลี่ยนไป git sync), `find_dataset3_zip_on_server()`, git init/status ครั้งแรก, เช็ค splits.json แบบ schema เก่า (`train/val/test` — พังไปแล้วตั้งแต่เปลี่ยนเป็น k-fold), grep วิเคราะห์ `train_run09.log` ทั้ง 3 cell, 2 cell ที่ error "CELL NOT RUN" (redefines variables), เซกชันกู้คืนข้อมูล 7z ทั้งหมด (เหตุการณ์ Session 5 ที่แก้เสร็จแล้ว), quick-tunnel ผ่าน `trycloudflare.com` ทั้งชุด (ถูกแทนที่ด้วย named tunnel ถาวร), cell trigger เทรน Run 10 (ผลบันทึกในนี้แล้ว), และทุกความพยายาม launch เว็บแอป/tunnel ที่ล้มเหลวหรือถูกแทนที่ระหว่างทาง
+
+### 3. Notebook.py ที่เหลือ (8 cell) — หน้าที่ของแต่ละตัว
+
+| # | คำสั่งหลัก | หน้าที่ |
+|---|---|---|
+| 1 | `def run(cmd)` / `def launch_bg(cmd)` | ฐานของทุก cell อื่น — `run()` รันคำสั่ง bash แบบ sync + capture output (ใช้กับคำสั่งที่อยากเห็นผลทันที) ส่วน `launch_bg()` รันแบบ background ผ่าน nohup+devnull (ใช้กับ process ที่ต้องรันค้างตลอด เช่นเว็บแอป/tunnel — กัน bug `capture_output=True` ค้างตลอดกาลเมื่อรวมกับ `&`) |
+| 2 | `run("pkill -f 'cloudflared tunnel run' ...")` | ฆ่า tunnel process เก่าก่อนเริ่มใหม่ กัน process ชนกัน |
+| 3 | `launch_bg("...cloudflared tunnel run --url http://localhost:5000 aggnet ...")` | เปิด named tunnel ถาวร forward **https://app.aggnet-qc.com** → `localhost:5000` — ต้องมี `--url` เสมอ ไม่งั้น 503 |
+| 4 | `run("pip install flask reportlab ...")` | ติดตั้ง package ที่เว็บแอปต้องใช้ (flask=web server, reportlab=สร้าง PDF report) — session reset แล้วหายทุกครั้ง ต้องรันซ้ำ |
+| 5 | `launch_bg("...python3 code/app_aggnet_qc.py ...")` | เปิดเว็บแอป AggNet QC จริง โหลด `aggnet_34_best.pth`/`aggnet_38_best.pth` ขึ้น GPU แล้ว serve port 5000 |
+| 6 | `run("sleep 5 && cat .../app.log")` | เช็ค log หลัง launch ยืนยันไม่มี error และเห็น "Running on 0.0.0.0:5000" |
+| 7 | `run("cp notebook.py notebook_backup_$(date)...")` | สำรอง notebook.py (ไม่ track ผ่าน git) ก่อนแก้ไขครั้งใหญ่ในอนาคต |
+| 8 | `run("ps auxww | grep -E 'app_aggnet_qc|cloudflared' ...")` | Health check — เช็คว่า process เว็บแอป+tunnel ยังรันอยู่จริง (ใช้ `auxww` กัน command ถูกตัดสั้น) |
+
+**ลำดับการพึ่งพา:** cell 1 คือฐานของทุกอย่าง → cell 2-3 คือคู่เปิด tunnel → cell 4-5-6 คือสาย install→เปิดแอป→ยืนยันผล → cell 7-8 เป็น utility อิสระ เรียกใช้เมื่อไหร่ก็ได้ไม่ผูกกับ cell อื่น
+
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->

@@ -907,6 +907,13 @@ def train_kfold(agg_filter=None, k=K_FOLDS):
         acc_s  = (err_s <= 10.0).float().mean().item() * 100
         print(f"  {lbl:>12}  {t_mae_arr[i]:>6.2f}%  {r2_str:>7}  {acc_s:>9.1f}%")
 
+    # ── Decision rule sweep (Pass/Fail gray-zone) — Model A only for now,
+    #    because only Model A has a documented Control Range (see skill.md
+    #    'Production Ratio Analysis'); Model B's range is still pending ──
+    if agg_filter == 'Aggregate 3_4inch':
+        retain_mae = compute_retain_mae(final_model, test_loader)
+        decision_rule_sweep(test_preds, test_targets, t_mae_arr, retain_mae=retain_mae)
+
     tag_short = tag.replace('/', '').replace('"', '')
     plot_history(final_history, suffix=f'{tag_short}_final')
     plot_gradation_curves(test_preds, test_targets, test_rec, sieve_labels=sieve_labels, suffix='test')
@@ -916,6 +923,143 @@ def train_kfold(agg_filter=None, k=K_FOLDS):
     print("    Done!")
     return dict(fold_metrics=fold_metrics, test_mae=t_mae, test_r2=t_r2,
                 test_ps_acc=t_ps_acc, test_s_acc=t_s_acc)
+
+
+# ─────────────────────────────────────────────
+# 6b.  DECISION RULE (Pass/Fail gray-zone sweep)
+# ─────────────────────────────────────────────
+# % Individual Retain Control Range (Model A only) — from skill.md
+# "Production Ratio Analysis". Model B's range is still pending (need ASTM
+# C33 size class + internal Control range for No4/No8 from the user).
+CONTROL_RANGE_RETAIN_12 = (29.0, 35.0)   # % retain on 1/2" sieve
+CONTROL_RANGE_RETAIN_38 = (25.0, 33.0)   # % retain on 3/8" sieve
+
+
+def compute_retain_mae(model, loader):
+    """
+    วัด MAE ของ Production Ratio head (retain บน 1/2" และ 3/8") โดยตรงจาก
+    head_production ของโมเดล — เดินผ่าน loader เดียวกับ evaluate() แต่แยก
+    ฟังก์ชันต่างหากไม่ยุ่งกับ evaluate()/training loop เดิมเลย (evaluate()
+    เดิมวัดแค่ %Passing loss/MAE เท่านั้น ไม่เคยวัด error ของ prod_ratio)
+
+    หมายเหตุ: model(img, scalar) ปกติจะคืน prod_ratio ก็ต่อเมื่อ
+    model.training=True เท่านั้น (ดู EfficientNetAggNet.forward()) — ฟังก์ชัน
+    นี้จึงเรียก model._extract() + model.head_production() ตรงๆ เพื่อดึงค่า
+    ออกมาได้แม้อยู่ใน eval() mode โดยไม่ต้องแก้ forward()
+
+    คืนค่า None ถ้าโมเดลนี้ไม่ใช่ multitask (เช่น Model B ไม่มี head_production)
+    """
+    if not (getattr(model, 'multitask', False) and hasattr(model, 'head_production')):
+        return None
+
+    model.eval()
+    total_abs_err = torch.zeros(2)   # [retain 1/2", retain 3/8"]
+    total = 0
+    with torch.no_grad():
+        for batch in loader:
+            imgs, scalars = batch[0].to(DEVICE), batch[1].to(DEVICE)
+            prod_target   = batch[4].to(DEVICE)
+            feat      = model._extract(imgs, scalars)
+            prod_pred = model.head_production(feat)
+            total_abs_err += (prod_pred.cpu() - prod_target.cpu()).abs().sum(dim=0)
+            total += imgs.size(0)
+
+    mae_retain = (total_abs_err / total * 100.0).numpy()   # fraction (0-1) -> %
+    return dict(mae_retain_12=float(mae_retain[0]), mae_retain_38=float(mae_retain[1]))
+
+
+def decision_rule_sweep(test_preds, test_targets, mae_per_sieve, k_values=None,
+                         retain_mae=None):
+    """
+    Sweep the gray-zone width multiplier k for a Pass/Fail decision rule
+    based on % individual retain (Model A: retain-1/2" and retain-3/8"
+    against their ASTM C33 Control Range).
+
+    For each candidate boundary (retain sieve, spec bound):
+        margin = |predicted_retain - spec_bound|
+        confident zone : margin >= k * mae_retain  -> auto Pass/Fail
+        gray zone      : margin <  k * mae_retain  -> route to confirmatory
+                          sieve analysis instead
+
+    mae_retain: prefer the value MEASURED directly from head_production
+    (pass in the dict returned by compute_retain_mae()). If not given,
+    falls back to an ESTIMATE by error propagation from the two adjacent
+    %Passing sieve MAEs (independent-error assumption:
+    mae_retain = sqrt(mae_i^2 + mae_j^2)) — clearly flagged in the printout
+    since it is an approximation, not a measured quantity.
+
+    Reports, for each k and within the confident zone only:
+        - False Accept rate  : predicted in-spec but truly out-of-spec
+                                (the dangerous direction — material that
+                                should have been rejected ships as good)
+        - False Reject rate  : predicted out-of-spec but truly in-spec
+                                (wasted confirmatory testing, not a quality
+                                risk)
+
+    Returns {sieve_name: [dict(k, gray_zone_pct, false_accept_pct,
+                                false_reject_pct), ...]}
+    """
+    if k_values is None:
+        k_values = np.arange(0.5, 3.01, 0.25)
+
+    pred_pct = test_preds.numpy() * 100.0
+    true_pct = test_targets.numpy() * 100.0
+
+    # sieve order is SIEVE_COLS_34 = ['3_4inch','1_2inch','3_8inch','No4','No8','Pan']
+    retain_12_pred = pred_pct[:, 0] - pred_pct[:, 1]
+    retain_12_true = true_pct[:, 0] - true_pct[:, 1]
+    retain_38_pred = pred_pct[:, 1] - pred_pct[:, 2]
+    retain_38_true = true_pct[:, 1] - true_pct[:, 2]
+
+    if retain_mae is not None:
+        mae_retain_12 = retain_mae['mae_retain_12']
+        mae_retain_38 = retain_mae['mae_retain_38']
+        mae_source = "measured directly from head_production"
+    else:
+        mae_retain_12 = float(np.sqrt(mae_per_sieve[0] ** 2 + mae_per_sieve[1] ** 2))
+        mae_retain_38 = float(np.sqrt(mae_per_sieve[1] ** 2 + mae_per_sieve[2] ** 2))
+        mae_source = "ESTIMATED by error propagation from %Passing MAE (approximation)"
+
+    print(f"\n  MAE(retain) source: {mae_source}")
+
+    checks = [
+        ('Retain 1/2"', retain_12_pred, retain_12_true, mae_retain_12, CONTROL_RANGE_RETAIN_12),
+        ('Retain 3/8"', retain_38_pred, retain_38_true, mae_retain_38, CONTROL_RANGE_RETAIN_38),
+    ]
+
+    print("\n" + "=" * 70)
+    print("  Decision Rule Sweep -- Pass/Fail gray-zone width (k) vs error rates")
+    print("  (Model A only -- Control Range from skill.md Production Ratio Analysis)")
+    print("=" * 70)
+
+    all_results = {}
+    for name, pred, true, mae_r, (lo, hi) in checks:
+        print(f"\n  {name}  (Control Range {lo:.0f}-{hi:.0f}%,  MAE(retain)~{mae_r:.2f}%)")
+        print(f"  {'k':>5}  {'gray-zone%':>11}  {'FalseAccept%':>13}  {'FalseReject%':>13}")
+        true_in_spec = (true >= lo) & (true <= hi)
+        pred_in_spec = (pred >= lo) & (pred <= hi)
+        rows = []
+        for k in k_values:
+            margin_lo = np.abs(pred - lo)
+            margin_hi = np.abs(hi - pred)
+            gray      = (margin_lo < k * mae_r) | (margin_hi < k * mae_r)
+            confident = ~gray
+
+            fa_denom = int((confident & pred_in_spec).sum())
+            fr_denom = int((confident & ~pred_in_spec).sum())
+            false_accept = int((confident & pred_in_spec & ~true_in_spec).sum())
+            false_reject = int((confident & ~pred_in_spec & true_in_spec).sum())
+
+            fa_rate   = false_accept / fa_denom * 100.0 if fa_denom > 0 else float('nan')
+            fr_rate   = false_reject / fr_denom * 100.0 if fr_denom > 0 else float('nan')
+            gray_rate = gray.mean() * 100.0
+
+            print(f"  {k:>5.2f}  {gray_rate:>10.1f}%  {fa_rate:>12.1f}%  {fr_rate:>12.1f}%")
+            rows.append(dict(k=float(k), gray_zone_pct=gray_rate,
+                              false_accept_pct=fa_rate, false_reject_pct=fr_rate))
+        all_results[name] = rows
+
+    return all_results
 
 
 # ─────────────────────────────────────────────
