@@ -40,6 +40,15 @@ from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
                                  Paragraph, Spacer, Image as RLImage, HRFlowable)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import os as _os
+_FONT_PATH = _os.path.join(_os.path.dirname(__file__), 'Sarabun-Regular.ttf')
+if _os.path.exists(_FONT_PATH):
+    pdfmetrics.registerFont(TTFont('Sarabun', _FONT_PATH))
+    _THAI_FONT = 'Sarabun'
+else:
+    _THAI_FONT = 'Helvetica'
 
 # ─────────────────────────────────────────────
 # CONFIGURATION
@@ -249,8 +258,8 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
                                   alignment=TA_CENTER, spaceAfter=2)
     style_sub    = ParagraphStyle('sub',    fontSize=11, fontName='Helvetica-Bold',
                                   alignment=TA_CENTER, spaceAfter=6)
-    style_header = ParagraphStyle('hdr',    fontSize=9,  fontName='Helvetica')
-    style_small  = ParagraphStyle('sm',     fontSize=8,  fontName='Helvetica')
+    style_header = ParagraphStyle('hdr',    fontSize=9,  fontName=_THAI_FONT)
+    style_small  = ParagraphStyle('sm',     fontSize=8,  fontName=_THAI_FONT)
 
     # ── Header ──
     header_data = [
