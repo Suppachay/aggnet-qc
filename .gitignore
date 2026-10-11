@@ -2,6 +2,10 @@ data/*
 !data/dataset3/
 data/dataset3/*
 !data/dataset3/splits.json
+!data/dataset4/
+data/dataset4/*
+!data/dataset4/labels.csv
+!data/dataset4/splits.json
 models/
 outputs/
 test_set/
