@@ -603,7 +603,7 @@ HTML_PAGE = """
     <label>วันที่ทดสอบ</label>
     <input type="date" id="tested_date">
     <label>เวลาทดสอบ</label>
-    <input type="time" id="tested_time" value="08:00">
+    <input type="time" id="tested_time">
   </div>
 
   <!-- Upload Card -->
@@ -668,8 +668,14 @@ HTML_PAGE = """
 let currentFile = null;
 let resultData  = null;
 
-// Set today's date
+// Set today's date and current time
 document.getElementById('tested_date').valueAsDate = new Date();
+(function() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,'0');
+  const mm = String(now.getMinutes()).padStart(2,'0');
+  document.getElementById('tested_time').value = hh + ':' + mm;
+})();
 
 function handleFile(input) {
   if (!input.files[0]) return;
