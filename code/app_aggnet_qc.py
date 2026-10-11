@@ -367,9 +367,8 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
     fm_data = [[
         cell('Fineness Modulus (FM)', bold=True, align=TA_LEFT),
         cell(f'{fm_val:.2f}', bold=True),
-        cell('FM = Σ%Cu.Ret (3/4"→#8) / 100', align=TA_LEFT),
     ]]
-    fm_tbl = Table(fm_data, colWidths=[60*mm, 25*mm, 95*mm])
+    fm_tbl = Table(fm_data, colWidths=[60*mm, 25*mm])
     fm_tbl.setStyle(TableStyle([
         ('GRID',       (0,0), (-1,-1), 0.5, colors.black),
         ('BACKGROUND', (0,0), (0,0),   colors.lightblue),
