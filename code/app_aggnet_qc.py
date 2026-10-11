@@ -157,6 +157,13 @@ def compute_production_ratio(ind_retain):
 
     return {'3/4"': zone_3_4, '1/2"': zone_1_2, '3/8"': zone_3_8}
 
+def compute_fm(cu_ret_full):
+    """คำนวณ Fineness Modulus (FM) จาก % Cumulative Retain บนตะแกรง 3/4"–#8 (ไม่รวม 1" และ Pan)
+    FM = (cu_ret[3/4"] + cu_ret[1/2"] + cu_ret[3/8"] + cu_ret[#4] + cu_ret[#8]) / 100
+    cu_ret_full: array 7 ค่า [1", 3/4", 1/2", 3/8", #4, #8, Pan]
+    """
+    return sum(cu_ret_full[1:6]) / 100.0  # index 1–5 = 3/4", 1/2", 3/8", #4, #8
+
 def get_zone_status(val, zone_name):
     lim = ZONE_LIMITS[zone_name]
     if lim['ctrl'][0] <= val <= lim['ctrl'][1]:
@@ -353,6 +360,27 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
         ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.Color(0.95,0.97,1)]),
     ]))
     story.append(sieve_tbl)
+    story.append(Spacer(1, 3*mm))
+
+    # ── FM ──
+    fm_val = compute_fm(cu_ret_full)
+    fm_data = [[
+        cell('Fineness Modulus (FM)', bold=True, align=TA_LEFT),
+        cell(f'{fm_val:.2f}', bold=True),
+        cell('FM = Σ%Cu.Ret (3/4"→#8) / 100', align=TA_LEFT),
+    ]]
+    fm_tbl = Table(fm_data, colWidths=[60*mm, 25*mm, 95*mm])
+    fm_tbl.setStyle(TableStyle([
+        ('GRID',       (0,0), (-1,-1), 0.5, colors.black),
+        ('BACKGROUND', (0,0), (0,0),   colors.lightblue),
+        ('BACKGROUND', (1,0), (1,0),   colors.Color(0.85,0.95,1)),
+        ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN',      (0,0), (-1,-1), 'CENTER'),
+        ('FONTSIZE',   (0,0), (-1,-1), 9),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+    ]))
+    story.append(fm_tbl)
     story.append(Spacer(1, 4*mm))
 
     # ── Gradation Chart ──
@@ -609,6 +637,12 @@ HTML_PAGE = """
       <tbody id="sieve-tbody"></tbody>
     </table>
 
+    <div id="fm-box" style="display:none; margin-top:14px; padding:10px 14px;
+         background:#ebf8ff; border-radius:10px; border-left:4px solid #3182ce;">
+      <span style="font-size:0.8rem; color:#2b6cb0; font-weight:600;">Fineness Modulus (FM)</span>
+      <span id="fm-val" style="font-size:1.4rem; font-weight:800; color:#1a365d; margin-left:12px;"></span>
+    </div>
+
     <h2 style="margin-top:14px;">🏗️ Production Ratio Analysis</h2>
     <div class="zone-grid" id="zone-grid"></div>
 
@@ -697,6 +731,12 @@ function renderResults(data) {
       </div>`;
   });
 
+  // FM
+  if (data.fm !== undefined) {
+    document.getElementById('fm-val').textContent = data.fm.toFixed(2);
+    document.getElementById('fm-box').style.display = 'block';
+  }
+
   // Chart
   document.getElementById('chart-img').src = 'data:image/png;base64,' + data.chart_b64;
 
@@ -772,6 +812,9 @@ def analyze():
                 'avg':      lim['avg'],
             })
 
+        # FM
+        fm = compute_fm(cu_ret)
+
         # Chart
         chart_buf = generate_chart(pred, source, agg_type=agg_type)
         import base64
@@ -781,6 +824,7 @@ def analyze():
             'sieve_table': sieve_table,
             'zones':       zones_out,
             'chart_b64':   chart_b64,
+            'fm':          round(float(fm), 2),
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
