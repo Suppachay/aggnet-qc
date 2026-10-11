@@ -999,4 +999,85 @@ Marimo session ถูก restart (สาเหตุไม่ทราบแน�
 
 **ลำดับการพึ่งพา:** cell 1 คือฐานของทุกอย่าง → cell 2-3 คือคู่เปิด tunnel → cell 4-5-6 คือสาย install→เปิดแอป→ยืนยันผล → cell 7-8 เป็น utility อิสระ เรียกใช้เมื่อไหร่ก็ได้ไม่ผูกกับ cell อื่น
 
+## Session 7 — 2026-10-11 (Web App Fixes + Dataset4 Preparation + Run 11)
+
+### 1. Web App Fixes (`app_aggnet_qc.py`)
+
+#### 1.1 ลบสูตร FM ออกจาก PDF
+| จุด | เดิม | ใหม่ |
+|---|---|---|
+| ตาราง FM | 3 column (ชื่อ / ค่า / สูตร `FM = Σ%Cu.Ret...`) | 2 column (ชื่อ / ค่า เท่านั้น) |
+| colWidths | `[60mm, 25mm, 95mm]` | `[60mm, 25mm]` |
+
+#### 1.2 Thai Font Support ใน PDF
+- ปัญหา: ชื่อ Source ภาษาไทย (เช่น "กิจวานิจ") แสดงผลเพี้ยน/ขาดใน PDF เพราะ `Helvetica` ไม่รองรับ Unicode Thai
+- แก้ไข: ดาวน์โหลด `Sarabun-Regular.ttf` (90,220 bytes จาก Google Fonts) ไปไว้ที่ `/workspace/AggNet/code/Sarabun-Regular.ttf` และ register กับ `pdfmetrics` ของ ReportLab
+- ใช้ `_THAI_FONT` (= `'Sarabun'` ถ้ามีไฟล์ ไม่งั้น fallback เป็น `'Helvetica'`) ใน `style_header` และ `style_small`
+
+⚠️ **Sarabun-Regular.ttf ไม่อยู่ใน git** (ขนาดเล็กแต่ binary) — ถ้า container restart ต้องดาวน์โหลดใหม่:
+```python
+run("curl -sL 'https://fonts.gstatic.com/s/sarabun/v15/DtVmJx26TKEr37c9YK5sulwm6gDXvwE.ttf' "
+    "-o /workspace/AggNet/code/Sarabun-Regular.ttf")
+```
+
+#### 1.3 Default Tested Time = เวลาปัจจุบัน
+- HTML: เอา `value="08:00"` ออกจาก `<input type="time" id="tested_time">`
+- JavaScript: set เวลาปัจจุบันตอน page load ด้วย `new Date().getHours()/getMinutes()`
+- Flask backend: `request.form.get('tested_time', '08:00')` ยังใช้ fallback '08:00' เหมือนเดิม (กรณี form ไม่มี field นี้)
+
+---
+
+### 2. Dataset4 Preparation (489 samples → 486 usable)
+
+| ข้อมูล | ค่า |
+|---|---|
+| ไฟล์ดิบ | `labels.xlsx` (489 rows) + Sample_001–Sample_489.jpg |
+| JPG จริง | 486 ไฟล์ (ขาด Sample_330, Sample_354, Sample_421 — มี label แต่ไม่มีภาพ) |
+| หลัง drop 3 rows | **486 samples usable** |
+| หลัง dedup | **469 samples** (ลบ label ซ้ำ 17 rows) |
+
+| ประเภท | จำนวนหลัง dedup |
+|---|---|
+| Aggregate 3_4inch | 333 |
+| Aggregate 3_8inch | 135 |
+| Aggregate 1 inch | 1 |
+
+**splits.json dataset4 (5-fold CV, test 10%):**
+| Model | Test | Pool | Folds |
+|---|---|---|---|
+| model_a (3_4inch) | 26 | 307 | [61,64,63,60,59] |
+| model_b (3_8inch) | 12 | 123 | [25,25,25,24,24] |
+| model_c (1inch) | 0 | 1 | skip (too few) |
+
+**ไฟล์ที่ commit เข้า git:** `.gitignore` (เพิ่ม exception dataset4), `data/dataset4/labels.csv`, `data/dataset4/splits.json`
+**รูปภาพ:** upload ผ่าน Google Drive → `gdown` ดาวน์โหลดตรงบน Marimo (564MB zip) → unzip ด้วย Python `zipfile` (ไม่มี `unzip` binary บน container)
+
+**Training script:** `code/aggnet_dataset4.py` — copy ของ `aggnet_dataset3.py` โดย sed แทนที่ path `dataset3` → `dataset4` ทั้งหมด ไม่เปลี่ยน architecture หรือ hyperparameter
+
+---
+
+### Run 11 — 2026-10-11 (5-Fold CV, Dataset4, 486 samples — ยังรันอยู่)
+
+**Script:** `/workspace/AggNet/code/aggnet_dataset4.py`
+**Dataset:** 486 samples raw / 469 หลัง dedup — `data/dataset4/splits.json`
+**Hardware:** NVIDIA A100-SXM4-80GB (RAILAB Marimo)
+**Status:** ⏳ กำลังรันอยู่ (เริ่ม ~88+ นาที ณ เวลาบันทึก) — จะอัปเดตผลเมื่อเสร็จ
+
+**ขั้นตอนหลัง train เสร็จ:**
+- [ ] ดู `tail -50 outputs/dataset4/train_kfold.log` เช็ค final test metrics
+- [ ] เปรียบเทียบกับ Run 10 (dataset3, 339 samples) — คาดหวัง MAE ลดลง โดยเฉพาะ 1/2" และ 3/8"
+- [ ] `git pull` บน Marimo แล้ว restart web app ให้โหลด dataset4 models
+
+---
+
+### ปัญหาที่เจอใน Session 7
+
+| ปัญหา | สาเหตุ | วิธีแก้ |
+|---|---|---|
+| RAILAB upload ไฟล์ล้มเหลว (Failed to upload file) | ZIP 564MB เกิน size limit ของ Marimo file manager | ใช้ Google Drive + gdown download บน Marimo แทน |
+| `unzip` command not found | Container ไม่มี binary | ใช้ Python `zipfile.ZipFile` แทน |
+| `validate_dataset.py` ไม่มี | ไม่ได้ commit ไว้ใน repo (อยู่แต่บน Marimo เดิม) | ตรวจสอบ dataset ด้วย Python inline แทน |
+| `aggnet_dataset4.py` ไม่รับ `--data_dir` argument | Script ใช้ hardcoded path ไม่มี argparse | สร้าง copy ใหม่ด้วย `sed` แทนที่ path ทั้งหมด |
+| RAILAB ล่ม (ERR_CONNECTION_RESET) ระหว่างทำงาน | Server-side ชั่วคราว | รอ reload |
+
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->

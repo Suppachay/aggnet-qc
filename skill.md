@@ -26,13 +26,15 @@ description: |
 
 ---
 
-## โค้ดปัจจุบัน: `aggnet_dataset3.py`
+## โค้ดปัจจุบัน: `aggnet_dataset4.py` (ตั้งแต่ 2026-10-11)
 
-**Path:** `/workspace/AggNet/code/aggnet_dataset3.py`
-**Dataset:** `/workspace/AggNet/data/dataset3/`
-**Splits:** `/workspace/AggNet/data/dataset3/splits.json`
-**Output:** `/workspace/AggNet/outputs/dataset3/`
-**Models:** `/workspace/AggNet/models/dataset3/`
+**Path:** `/workspace/AggNet/code/aggnet_dataset4.py`
+**Dataset:** `/workspace/AggNet/data/dataset4/`
+**Splits:** `/workspace/AggNet/data/dataset4/splits.json`
+**Output:** `/workspace/AggNet/outputs/dataset4/`
+**Models:** `/workspace/AggNet/models/dataset4/`
+
+> (Dataset3 script ยังอยู่ที่ `code/aggnet_dataset3.py` ใช้ path `data/dataset3/` เหมือนเดิม)
 
 > **หมายเหตุ (2026-07-19):** เปลี่ยน root path จาก `/root/AggNet` → `/workspace/AggNet` เพราะย้ายแพลตฟอร์ม — ดู [Environment & Workflow](#environment--workflow-2026-07-19) ด้านล่าง
 
@@ -134,16 +136,29 @@ CBAM (Channel Attention + Spatial Attention)   ← NEW: โฟกัสบริ
 
 ---
 
-## Dataset (อัปเดตล่าสุด 2026-08-15)
+## Dataset (อัปเดตล่าสุด 2026-10-11)
 
-> 145 (2026-06-25) → 235 (2026-07-19) → **339 samples หลัง clean (2026-08-15)** — `splits.json` สร้างด้วย `code/make_splits.py` เป็น test (held out) + 5-fold pool
+> 145 (2026-06-25) → 235 (2026-07-19) → 339 (2026-08-15) → **469 samples หลัง clean (2026-10-11, dataset4)** — `splits.json` สร้างด้วย `code/make_splits.py` เป็น test (held out) + 5-fold pool
 
+### Dataset3 (สำหรับ Run 01–10)
 | ประเภท | จำนวน (หลัง clean) | Split (test / 5-fold pool) |
 |--------|-------------------|----------------------|
 | Aggregate 3_4inch | **236 samples** | test=18, folds=[45,41,46,42,44] |
 | Aggregate 3_8inch | **102 samples** | test=9, folds=[19,19,19,19,17] |
 | Aggregate 1 inch  | **1 sample** | รอข้อมูลเพิ่ม (ยังต้อง ≥7 ถึงจะ train ได้ตาม K_FOLDS+2) |
 | **รวม** | **339 samples** | |
+
+### Dataset4 (สำหรับ Run 11 เป็นต้นไป — 2026-10-11)
+| ประเภท | จำนวน (หลัง clean) | Split (test / 5-fold pool) |
+|--------|-------------------|----------------------|
+| Aggregate 3_4inch | **333 samples** | test=26, folds=[61,64,63,60,59] |
+| Aggregate 3_8inch | **135 samples** | test=12, folds=[25,25,25,24,24] |
+| Aggregate 1 inch  | **1 sample** | skip (too few) |
+| **รวม** | **469 samples** | |
+
+- ขาดภาพ: Sample_330, Sample_354, Sample_421 (มี label แต่ไม่มีไฟล์ → drop ออก)
+- Script: `code/aggnet_dataset4.py` (copy ของ dataset3 เปลี่ยน path เป็น `data/dataset4`)
+- รูปภาพบน Marimo: upload ผ่าน Google Drive → gdown (ไม่ track ผ่าน git เพราะ ~630MB)
 
 ### Production Ratio Analysis (Model A — % Individual Retain)
 
@@ -323,6 +338,27 @@ test_set/
 __pycache__/
 ```
 
+### วิธีอัปโหลดรูปภาพขนาดใหญ่ขึ้น Marimo (2026-10-11)
+
+RAILAB file manager มี size limit — ถ้า zip ใหญ่กว่า ~100MB ให้ใช้ Google Drive + gdown:
+```python
+# 1. สร้าง zip บน local (PowerShell)
+# Compress-Archive -Path "data\dataset4\*.jpg" -DestinationPath "Desktop\dataset4_images.zip"
+# 2. Upload ขึ้น Google Drive แล้ว get shareable link (Anyone with the link)
+# 3. Download บน Marimo
+FILE_ID = "1ABC..."  # เอา ID จาก drive.google.com/file/d/<ID>/view
+run(f"pip install gdown -q --break-system-packages && "
+    f"mkdir -p /workspace/AggNet/data/dataset4 && "
+    f"gdown {FILE_ID} -O /workspace/AggNet/data/dataset4_images.zip")
+# 4. Unzip ด้วย Python (ไม่มี unzip binary)
+run("""python3 -c "
+import zipfile, os
+with zipfile.ZipFile('/workspace/AggNet/data/dataset4_images.zip') as z:
+    z.extractall('/workspace/AggNet/data/dataset4/')
+print('Done:', len([f for f in os.listdir('/workspace/AggNet/data/dataset4') if f.endswith('.jpg')]), 'jpg')
+" """)
+```
+
 ### สิ่งที่ต้องเช็คทุกครั้งที่ย้าย/อัปโหลด dataset ใหม่บน Marimo
 - ระวัง **nested folder ซ้ำ** ถ้า unzip ด้วย `unzip -o X.zip -d X` ทั้งที่ zip มีโฟลเดอร์ชื่อเดียวกันอยู่ข้างในอยู่แล้ว จะได้ `X/X/...` ซ้อนกัน 2 ชั้น — เช็คด้วย `find /workspace -maxdepth 3 -iname 'AggNet' -type d` ก่อนเสมอ
 - ถ้า dataset โต/เปลี่ยนขนาด (จำนวน samples เปลี่ยน) **ต้องรัน `code/make_splits.py` ใหม่เสมอ** — `splits.json` เก่าจะไม่ครอบคลุม sample_id ใหม่ และ `train()` จะ error/skip ถ้าไม่มี `splits.json` เลย
@@ -367,17 +403,17 @@ apt-get update && apt-get install -y p7zip-full   # ถ้าต้องแต�
 ## สิ่งที่ยังไม่ได้ทำ / TODO
 
 ### Priority สูง (ทำก่อน)
-- [ ] **เพิ่มข้อมูล 3_4inch** โดยเฉพาะ "fine content สูง" (1/2">55%) และ "coarse มาก" (3/4"<70%) — Run 09 (235 samples) 1/2" MAE ยังสูง 12.46% (val), 3/8" 11.11% (val) แทบไม่ขยับจาก Run 08 ทั้งที่ data เพิ่ม — จุดนี้ยังเป็นคอขวดจริง
-- [ ] **เพิ่มข้อมูล Aggregate 1 inch** ให้ถึง ≥ 4 samples เพื่อเปิด train Model C (ยังมีแค่ 1 sample)
-- [ ] เช็คว่า accuracy tolerance ที่เปลี่ยนจาก ±5% → ±10% ใน Run 09 ตั้งใจแก้โค้ดหรือเป็น default เดิม (ยังไม่ตรวจสอบ)
-- [ ] Deploy web app ขึ้น production จริง (Fly.io/Cloud Run + Basic Auth) — ตอนนี้เข้าถึงได้แค่ผ่าน Cloudflare quick tunnel ชั่วคราวเท่านั้น
-- [ ] รอผล 5-fold CV training จบ (Run 10) — เริ่มรันแล้วตั้งแต่ 2026-08-15 ยังไม่เสร็จ
+- [ ] **รอผล Run 11** (dataset4, 469 samples, A100) — ยังรันอยู่ ณ 2026-10-11
+- [ ] หลัง Run 11 เสร็จ: อัปเดต web app ให้โหลด `models/dataset4/aggnet_34_best.pth` + `aggnet_38_best.pth`
+- [ ] **เพิ่มข้อมูล Aggregate 1 inch** ให้ถึง ≥ 7 samples เพื่อเปิด train Model C (ยังมีแค่ 1 sample)
+- [ ] Deploy web app ขึ้น production จริง (Fly.io/Cloud Run + Basic Auth)
 - [ ] Confirm label ซ้ำใหม่ 4 sample (240,259,344,345) กับทีมเก็บข้อมูล
-- [ ] หาไฟล์ภาพ `Sample_330` ที่หาย หรือลบ row ออกจาก labels.csv
+- [ ] หาไฟล์ภาพ `Sample_330`, `Sample_354`, `Sample_421` ที่หายใน dataset4 หรือลบ row ออก
 - [ ] ขอ ASTM C33 size class + Control range ของ Model B (No4/No8) เพื่อทำ Production Ratio analysis ให้ครบ
-- [x] ~~อัปเดต Web App~~ — ใช้ CBAM+MT model, Report 3/8" ตัด 1"/3/4" แล้ว
-- [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว (ดู experiment_log.md)
-- [x] ~~k-fold cross-validation~~ — implement แล้ว 2026-08-15 (`train_kfold()`), ดู experiment_log.md Session 5
+- [x] ~~อัปเดต Web App~~ — ใช้ CBAM+MT model, Report 3/8" ตัด 1"/3/4" แล้ว; ลบสูตร FM จาก PDF; Thai font (Sarabun); default time = ปัจจุบัน
+- [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว
+- [x] ~~k-fold cross-validation~~ — implement แล้ว 2026-08-15 (`train_kfold()`)
+- [x] ~~เพิ่มข้อมูล 339 → 469 samples (dataset4)~~ — dataset4 พร้อมแล้ว, Run 11 กำลังรัน
 
 ### Priority กลาง
 - [ ] เพิ่ม `scaler.json` บันทึก weight normalization params (ปัจจุบัน hardcode WEIGHT_MIN/MAX)
