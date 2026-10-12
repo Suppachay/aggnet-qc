@@ -53,9 +53,9 @@ else:
 # ─────────────────────────────────────────────
 # CONFIGURATION
 # ─────────────────────────────────────────────
-MODEL_PATH_34 = "/workspace/AggNet/models/dataset3/aggnet_34_best.pth"   # Aggregate 3_4inch (6 sieves)
-MODEL_PATH_38 = "/workspace/AggNet/models/dataset3/aggnet_38_best.pth"   # Aggregate 3_8inch (3 sieves: No4/No8/Pan)
-SAVE_DIR      = "/workspace/AggNet/outputs/dataset3"
+MODEL_PATH_34 = "/workspace/AggNet/models/dataset4/aggnet_34_best.pth"   # Aggregate 3_4inch (6 sieves)
+MODEL_PATH_38 = "/workspace/AggNet/models/dataset4/aggnet_38_best.pth"   # Aggregate 3_8inch (3 sieves: No4/No8/Pan)
+SAVE_DIR      = "/workspace/AggNet/outputs/dataset4"
 HOST          = "0.0.0.0"
 PORT          = 5000
 IMG_SIZE      = (224, 224)
@@ -92,7 +92,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 # MODEL (import from aggnet_dataset3.py)
 # ─────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from aggnet_dataset3 import EfficientNetAggNet
+from aggnet_dataset4 import EfficientNetAggNet
 
 def load_model(path, num_sieves, multitask=False):
     model = EfficientNetAggNet(num_sieves=num_sieves, multitask=multitask).to(DEVICE)
