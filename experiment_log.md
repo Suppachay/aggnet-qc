@@ -1056,17 +1056,65 @@ run("curl -sL 'https://fonts.gstatic.com/s/sarabun/v15/DtVmJx26TKEr37c9YK5sulwm6
 
 ---
 
-### Run 11 — 2026-10-11 (5-Fold CV, Dataset4, 486 samples — ยังรันอยู่)
+### Run 11 — 2026-10-11 (5-Fold CV, Dataset4, 469 samples) ✅
 
 **Script:** `/workspace/AggNet/code/aggnet_dataset4.py`
 **Dataset:** 486 samples raw / 469 หลัง dedup — `data/dataset4/splits.json`
 **Hardware:** NVIDIA A100-SXM4-80GB (RAILAB Marimo)
-**Status:** ⏳ กำลังรันอยู่ (เริ่ม ~88+ นาที ณ เวลาบันทึก) — จะอัปเดตผลเมื่อเสร็จ
+**Status:** ✅ เสร็จสมบูรณ์
 
-**ขั้นตอนหลัง train เสร็จ:**
-- [ ] ดู `tail -50 outputs/dataset4/train_kfold.log` เช็ค final test metrics
-- [ ] เปรียบเทียบกับ Run 10 (dataset3, 339 samples) — คาดหวัง MAE ลดลง โดยเฉพาะ 1/2" และ 3/8"
-- [ ] `git pull` บน Marimo แล้ว restart web app ให้โหลด dataset4 models
+#### Model A — 3/4" (3_4inch)
+Pool: 307 samples | Test (held out): 26
+
+**5-Fold CV:**
+| Metric | Mean ± Std | Fold 1 | Fold 2 | Fold 3 | Fold 4 | Fold 5 |
+|---|---|---|---|---|---|---|
+| MAE (%) | 5.217 ± 0.401 | 4.81 | 4.85 | 5.70 | 5.03 | 5.70 |
+| R² | 0.042 ± 0.075 | 0.14 | 0.12 | −0.02 | −0.05 | 0.02 |
+| Per-sieve Acc (%) | 81.124 ± 2.217 | 82.79 | 83.85 | 79.63 | 81.67 | 77.68 |
+| Sample Acc (%) | 42.533 ± 5.036 | 42.62 | 51.56 | 42.86 | 38.33 | 37.29 |
+
+**Final retrain (307 samples, Phase 2 median = 50 epochs):**
+| Metric | ค่า |
+|---|---|
+| MAE (avg) | 5.98% |
+| Per-sieve Acc (±10%) | 76.3% |
+| Sample Acc (±10%) | 34.6% |
+| R² | 0.0306 |
+| Model saved | `models/dataset4/aggnet_34_best.pth` ✅ |
+
+#### Model B — 3/8" (3_8inch)
+Pool: 123 samples | Test (held out): 12
+
+**5-Fold CV:**
+| Metric | Mean ± Std | Fold 1 | Fold 2 | Fold 3 | Fold 4 | Fold 5 |
+|---|---|---|---|---|---|---|
+| MAE (%) | 3.066 ± 0.818 | 3.01 | 2.44 | 2.84 | 2.40 | 4.63 |
+| R² | −0.150 ± 0.318 | 0.06 | −0.02 | 0.01 | −0.01 | −0.78 |
+| Per-sieve Acc (%) | 92.089 ± 5.534 | 94.67 | 97.33 | 90.67 | 95.83 | 81.94 |
+| Sample Acc (%) | 79.567 ± 11.839 | 84.0 | 92.0 | 76.0 | 87.5 | 58.33 |
+
+**Final retrain (123 samples, Phase 2 median = 66 epochs):**
+| Metric | ค่า |
+|---|---|
+| MAE (avg) | 4.17% |
+| Per-sieve Acc (±10%) | 91.7% |
+| Sample Acc (±10%) | 75.0% |
+| R² | −0.2080 |
+| Model saved | `models/dataset4/aggnet_38_best.pth` ✅ |
+
+#### Model C — 1" (1inch)
+- **SKIP** — มีเพียง 1 sample ใน pool → รอเพิ่มข้อมูล
+
+**สังเกต:**
+- Model A (3/4") CV MAE ~5.2% ดีกว่า dataset3 (ยังต้องเปรียบเทียบ) แต่ Sample Acc ต่ำ ~42% เพราะข้อมูล 3_4inch มาจากหลาย source และ curve shape ต่างกัน
+- Model B (3/8") ผลดีมาก CV MAE ~3.1%, Sample Acc ~80% — เพราะข้อมูล 3_8inch เป็น single-source และ gradation ค่อนข้าง consistent
+- Fold 5 ของ Model B มี MAE สูงกว่าปกติ (4.63%) และ R²=-0.78 — อาจเป็น distribution shift ใน fold นั้น
+- R² ต่ำ/ติดลบในหลาย fold เพราะ variance ของ gradation curve ต่างกันมากระหว่าง source groups
+
+**ขั้นตอนถัดไป:**
+- [ ] อัปเดต `app_aggnet_qc.py` ให้ MODEL_PATH ชี้ไปที่ `models/dataset4/`
+- [ ] Push web app update ขึ้น GitHub → git pull บน Marimo → restart app
 
 ---
 
