@@ -127,7 +127,7 @@ def predict_from_image(img_pil, agg_type='Aggregate 3_4inch', weight_g=650.0):
         # 3_8inch: predict No4/No8/Pan เท่านั้น, hardcode 3 sieve แรก
         with torch.no_grad():
             pred_3 = MODEL_38(x, w).squeeze().cpu().numpy() * 100  # (3,) = No4, No8, Pan
-        pred = np.array([0.0, 100.0, 99.7, pred_3[0], pred_3[1], pred_3[2]])
+        pred = np.array([100.0, 100.0, 99.7, pred_3[0], pred_3[1], pred_3[2]])
     else:
         with torch.no_grad():
             pred = MODEL_34(x, w).squeeze().cpu().numpy() * 100    # (6,)
