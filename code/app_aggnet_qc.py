@@ -167,11 +167,12 @@ def compute_production_ratio(ind_retain):
     return {'3/4"': zone_3_4, '1/2"': zone_1_2, '3/8"': zone_3_8}
 
 def compute_fm(cu_ret_full):
-    """คำนวณ Fineness Modulus (FM) จาก % Cumulative Retain บนตะแกรง 3/4"–#8 (ไม่รวม 1" และ Pan)
-    FM = (cu_ret[3/4"] + cu_ret[1/2"] + cu_ret[3/8"] + cu_ret[#4] + cu_ret[#8]) / 100
+    """คำนวณ Fineness Modulus (FM) จาก % Cumulative Retain บนตะแกรง 3/4"–Pan
+    FM = (cu_ret[3/4"] + cu_ret[1/2"] + cu_ret[3/8"] + cu_ret[#4] + cu_ret[#8] + cu_ret[Pan]) / 100
+    Pan ใช้แทน #16 สำหรับหิน 3/8" (สำหรับหินสะอาด #16 ind.ret ≈ 0 ∴ #16 cu.ret ≈ Pan cu.ret)
     cu_ret_full: array 7 ค่า [1", 3/4", 1/2", 3/8", #4, #8, Pan]
     """
-    return sum(cu_ret_full[1:6]) / 100.0  # index 1–5 = 3/4", 1/2", 3/8", #4, #8
+    return sum(cu_ret_full[1:7]) / 100.0  # index 1–6 = 3/4", 1/2", 3/8", #4, #8, Pan
 
 def get_zone_status(val, zone_name):
     lim = ZONE_LIMITS[zone_name]
