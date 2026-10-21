@@ -652,8 +652,10 @@ HTML_PAGE = """
       <span id="fm-val" style="font-size:1.4rem; font-weight:800; color:#1a365d; margin-left:12px;"></span>
     </div>
 
+    <div id="prod-section" style="display:none">
     <h2 style="margin-top:14px;">🏗️ Production Ratio Analysis</h2>
     <div class="zone-grid" id="zone-grid"></div>
+    </div>
 
     <h2 style="margin-top:14px;">📈 Gradation Curve</h2>
     <img id="chart-img" src="" alt="chart">
@@ -745,6 +747,10 @@ function renderResults(data) {
         <span class="zone-status ${cls}">${z.status}</span>
       </div>`;
   });
+
+  // Production Ratio — ซ่อนสำหรับ 3/8"
+  const is38 = data.agg_type === 'Aggregate 3_8inch';
+  document.getElementById('prod-section').style.display = is38 ? 'none' : 'block';
 
   // FM
   if (data.fm !== undefined) {
@@ -840,6 +846,7 @@ def analyze():
             'zones':       zones_out,
             'chart_b64':   chart_b64,
             'fm':          round(float(fm), 2),
+            'agg_type':    agg_type,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
