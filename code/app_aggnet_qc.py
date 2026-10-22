@@ -493,6 +493,11 @@ HTML_PAGE = """
   .logo { width: 40px; height: 40px; background: white; border-radius: 8px;
           display: flex; align-items: center; justify-content: center;
           font-weight: 900; color: #2b6cb0; font-size: 0.9rem; }
+  .header-right { margin-left: auto; text-align: right; }
+  .header-right .company-name { font-size: 0.75rem; opacity: 0.85; margin-bottom: 4px; }
+  .nav-links a { color: #90cdf4; text-decoration: none; font-size: 0.8rem;
+                 margin-left: 12px; font-weight: 600; }
+  .nav-links a:hover { color: white; }
 
   .container { padding: 16px; max-width: 480px; margin: 0 auto; }
 
@@ -599,6 +604,21 @@ HTML_PAGE = """
     <h1>AggNet QC</h1>
     <p>Sieve Analysis AI — ASTM C-33</p>
   </div>
+  {% if company_name %}
+  <div class="header-right">
+    <div class="company-name">🏢 {{ company_name }}</div>
+    <div class="nav-links">
+      <a href="/history">📋 ประวัติ</a>
+      <a href="/logout">ออกจากระบบ</a>
+    </div>
+  </div>
+  {% else %}
+  <div class="header-right">
+    <div class="nav-links">
+      <a href="/login">🔑 เข้าสู่ระบบ</a>
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="container">
@@ -802,7 +822,8 @@ async function downloadPDF() {
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_PAGE)
+    return render_template_string(HTML_PAGE,
+        company_name=session.get('company_name', ''))
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
