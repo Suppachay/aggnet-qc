@@ -255,6 +255,17 @@ def generate_chart(pred_6, source_name="", agg_type='Aggregate 3_4inch'):
 # ─────────────────────────────────────────────
 # PDF REPORT GENERATION
 # ─────────────────────────────────────────────
+def to_12h(time_str):
+    """แปลง HH:MM หรือ HH:MM:SS → 12:15 PM"""
+    try:
+        parts = time_str.split(':')
+        h, m = int(parts[0]), int(parts[1])
+        period = 'AM' if h < 12 else 'PM'
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {period}"
+    except Exception:
+        return time_str
+
 def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
     """สร้าง PDF Report ตาม format SIEVE ANALYSIS AGGREGATE"""
     buf = io.BytesIO()
@@ -906,7 +917,7 @@ def report():
         source      = request.form.get('source', 'Unknown')
         agg_type    = request.form.get('agg_type', 'Aggregate 3_4inch')
         tested_date = request.form.get('tested_date', str(datetime.date.today()))
-        tested_time = request.form.get('tested_time', '08:00')
+        tested_time = to_12h(request.form.get('tested_time', '08:00'))
 
         img  = Image.open(file.stream).convert('RGB')
         pred = predict_from_image(img, agg_type=agg_type)
@@ -1305,7 +1316,7 @@ def history_pdf(aid):
     agg_type    = row['agg_type']
     source      = row['source'] or ''
     tested_date = row['analyzed_at'].strftime('%Y-%m-%d')
-    tested_time = row['analyzed_at'].strftime('%H:%M')
+    tested_time = to_12h(row['analyzed_at'].strftime('%H:%M'))
     chart_buf = generate_chart(pred_6, source, agg_type=agg_type)
     pdf_buf   = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf)
     fname = f"AggNet_Report_{tested_date}_{aid}.pdf"
@@ -1403,7 +1414,7 @@ def export_csv():
         # passing[0]=1", [1]=3/4", [2]=1/2", [3]=3/8", [4]=#4, [5]=#8, [6]=Pan
         writer.writerow([
             r['analyzed_at'].strftime('%Y-%m-%d'),
-            r['analyzed_at'].strftime('%H:%M:%S'),
+            to_12h(r['analyzed_at'].strftime('%H:%M')),
             '3/4"' if '3_4' in (r['agg_type'] or '') else '3/8"',
             r['source'],
             f"{r['fm']:.2f}" if r['fm'] else '',
