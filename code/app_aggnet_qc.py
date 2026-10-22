@@ -25,7 +25,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file, render_template_string, make_response
+from flask import Flask, request, jsonify, send_file, render_template_string, make_response, session, redirect, url_for
 
 import torch
 import torch.nn as nn
@@ -87,9 +87,20 @@ ZONE_LIMITS = {
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 
+# ─────────────────────────────────────────────
+# DATABASE (Supabase)
+# ─────────────────────────────────────────────
+try:
+    import db as aggnet_db
+    aggnet_db.init_db()
+    DB_ENABLED = True
+    print("DB: Supabase connected")
+except Exception as _db_err:
+    DB_ENABLED = False
+    print(f"DB: disabled ({_db_err})")
 
 # ─────────────────────────────────────────────
-# MODEL (import from aggnet_dataset3.py)
+# MODEL (import from aggnet_dataset4.py)
 # ─────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aggnet_dataset4 import EfficientNetAggNet
@@ -459,6 +470,7 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
 # FLASK APP
 # ─────────────────────────────────────────────
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", "aggnet-qc-secret-2026")
 
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -841,6 +853,21 @@ def analyze():
         import base64
         chart_b64 = base64.b64encode(chart_buf.read()).decode()
 
+        # บันทึกลง DB (ถ้า login อยู่)
+        if DB_ENABLED and session.get('company_id'):
+            try:
+                aggnet_db.save_analysis(
+                    company_id     = session['company_id'],
+                    agg_type       = agg_type,
+                    source         = source,
+                    fm             = round(float(fm), 2),
+                    sieve_data     = sieve_table,
+                    zones_data     = zones_out,
+                    image_filename = image.filename,
+                )
+            except Exception as _db_save_err:
+                print(f"DB save error: {_db_save_err}")  # ไม่ crash app
+
         return jsonify({
             'sieve_table': sieve_table,
             'zones':       zones_out,
@@ -876,6 +903,273 @@ def report():
         return response
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ─────────────────────────────────────────────
+# AUTH ROUTES
+# ─────────────────────────────────────────────
+
+LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AggNet QC — เข้าสู่ระบบ</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Sarabun', sans-serif; background: #f0f4f8;
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: white; border-radius: 16px; padding: 40px 36px; width: 360px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.10); }
+    .logo { text-align: center; font-size: 2rem; margin-bottom: 6px; }
+    h1 { text-align: center; font-size: 1.3rem; color: #1a365d; margin-bottom: 24px; }
+    label { font-size: 0.85rem; color: #4a5568; font-weight: 600; display: block; margin-bottom: 4px; }
+    input { width: 100%; padding: 10px 14px; border: 1.5px solid #e2e8f0;
+            border-radius: 8px; font-size: 1rem; font-family: inherit; margin-bottom: 16px; }
+    input:focus { outline: none; border-color: #3182ce; }
+    .btn { width: 100%; padding: 12px; background: #2b6cb0; color: white; border: none;
+           border-radius: 8px; font-size: 1rem; font-family: inherit; font-weight: 700;
+           cursor: pointer; margin-top: 4px; }
+    .btn:hover { background: #2c5282; }
+    .error { background: #fff5f5; border: 1px solid #fc8181; color: #c53030;
+             border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🔬</div>
+    <h1>AggNet QC — เข้าสู่ระบบ</h1>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="POST" action="/login">
+      <label>ชื่อผู้ใช้</label>
+      <input type="text" name="username" required autocomplete="username">
+      <label>รหัสผ่าน</label>
+      <input type="password" name="password" required autocomplete="current-password">
+      <button class="btn" type="submit">เข้าสู่ระบบ</button>
+    </form>
+  </div>
+</body>
+</html>"""
+
+HISTORY_PAGE = """<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AggNet QC — ประวัติการวิเคราะห์</title>
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Sarabun', sans-serif; background: #f0f4f8; padding: 20px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between;
+              background: #1a365d; color: white; padding: 12px 20px; border-radius: 12px;
+              margin-bottom: 20px; }
+    .topbar h1 { font-size: 1.1rem; }
+    .topbar a { color: #90cdf4; text-decoration: none; font-size: 0.9rem; }
+    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    select, input[type=date] { padding: 8px 12px; border: 1.5px solid #e2e8f0;
+                                border-radius: 8px; font-family: inherit; font-size: 0.9rem; }
+    .btn-sm { padding: 8px 16px; background: #2b6cb0; color: white; border: none;
+              border-radius: 8px; font-family: inherit; cursor: pointer; font-size: 0.9rem; }
+    .btn-export { background: #276749; }
+    table { width: 100%; background: white; border-radius: 12px;
+            border-collapse: collapse; overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+    th { background: #2b6cb0; color: white; padding: 10px 14px; text-align: left; font-size: 0.85rem; }
+    td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-size: 0.9rem; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #ebf8ff; }
+    .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .b34 { background: #bee3f8; color: #2b6cb0; }
+    .b38 { background: #c6f6d5; color: #276749; }
+    .empty { text-align: center; padding: 40px; color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>🔬 AggNet QC — ประวัติ: {{ company_name }}</h1>
+    <div>
+      <a href="/">🏠 วิเคราะห์</a> &nbsp;|&nbsp;
+      <a href="/logout">ออกจากระบบ</a>
+    </div>
+  </div>
+
+  <form method="GET" action="/history">
+    <div class="filter-row">
+      <select name="agg_type">
+        <option value="">ทุกประเภท</option>
+        <option value="Aggregate 3_4inch" {% if filter_agg=='Aggregate 3_4inch' %}selected{% endif %}>หิน 3/4"</option>
+        <option value="Aggregate 3_8inch" {% if filter_agg=='Aggregate 3_8inch' %}selected{% endif %}>หิน 3/8"</option>
+      </select>
+      <input type="date" name="date_from" value="{{ filter_from }}">
+      <input type="date" name="date_to"   value="{{ filter_to }}">
+      <button class="btn-sm" type="submit">ค้นหา</button>
+      <a href="/export?agg_type={{ filter_agg }}&date_from={{ filter_from }}&date_to={{ filter_to }}">
+        <button class="btn-sm btn-export" type="button">⬇ Export CSV</button>
+      </a>
+    </div>
+  </form>
+
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>วันที่-เวลา</th><th>ประเภทหิน</th><th>แหล่ง</th>
+        <th>FM</th><th>#4 (%ผ่าน)</th><th>#8 (%ผ่าน)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ r.analyzed_at.strftime('%d/%m/%Y %H:%M') }}</td>
+        <td>
+          <span class="badge {{ 'b34' if '3_4' in r.agg_type else 'b38' }}">
+            {{ '3/4"' if '3_4' in r.agg_type else '3/8"' }}
+          </span>
+        </td>
+        <td>{{ r.source }}</td>
+        <td><b>{{ '%.2f'|format(r.fm) }}</b></td>
+        <td>{{ '%.1f'|format(r.sieve_json[4].passing) if r.sieve_json else '-' }}</td>
+        <td>{{ '%.1f'|format(r.sieve_json[5].passing) if r.sieve_json else '-' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">ยังไม่มีประวัติการวิเคราะห์</div>
+  {% endif %}
+</body>
+</html>"""
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        if DB_ENABLED:
+            company = aggnet_db.verify_login(username, password)
+            if company:
+                session['company_id']   = company['id']
+                session['company_name'] = company['name']
+                return redirect(url_for('index'))
+        return render_template_string(LOGIN_PAGE, error='ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง')
+    return render_template_string(LOGIN_PAGE, error=None)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/history')
+def history():
+    if not session.get('company_id'):
+        return redirect(url_for('login'))
+    filter_agg  = request.args.get('agg_type', '')
+    filter_from = request.args.get('date_from', '')
+    filter_to   = request.args.get('date_to', '')
+    rows = []
+    if DB_ENABLED:
+        raw = aggnet_db.get_analyses(
+            company_id = session['company_id'],
+            agg_type   = filter_agg or None,
+            date_from  = filter_from or None,
+            date_to    = filter_to   or None,
+        )
+        # แปลง sieve_json string → list
+        import json as _json
+        for r in raw:
+            if isinstance(r['sieve_json'], str):
+                r['sieve_json'] = _json.loads(r['sieve_json'])
+        rows = raw
+    return render_template_string(HISTORY_PAGE,
+        company_name = session.get('company_name', ''),
+        rows         = rows,
+        filter_agg   = filter_agg,
+        filter_from  = filter_from,
+        filter_to    = filter_to,
+    )
+
+@app.route('/export')
+def export_csv():
+    if not session.get('company_id'):
+        return redirect(url_for('login'))
+    import csv, io as _io, json as _json
+    filter_agg  = request.args.get('agg_type', '')
+    filter_from = request.args.get('date_from', '')
+    filter_to   = request.args.get('date_to', '')
+    rows = aggnet_db.get_analyses(
+        company_id = session['company_id'],
+        agg_type   = filter_agg or None,
+        date_from  = filter_from or None,
+        date_to    = filter_to   or None,
+        limit      = 10000,
+    ) if DB_ENABLED else []
+
+    buf = _io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(['Date', 'Time', 'AggType', 'Source', 'FM',
+                     '3/4_%pass', '1/2_%pass', '3/8_%pass', '#4_%pass', '#8_%pass', 'Pan_%pass'])
+    for r in rows:
+        sieves = r['sieve_json'] if isinstance(r['sieve_json'], list) else _json.loads(r['sieve_json'] or '[]')
+        passing = [s['passing'] for s in sieves] if sieves else [''] * 7
+        # passing[0]=1", [1]=3/4", [2]=1/2", [3]=3/8", [4]=#4, [5]=#8, [6]=Pan
+        writer.writerow([
+            r['analyzed_at'].strftime('%Y-%m-%d'),
+            r['analyzed_at'].strftime('%H:%M:%S'),
+            '3/4"' if '3_4' in (r['agg_type'] or '') else '3/8"',
+            r['source'],
+            f"{r['fm']:.2f}" if r['fm'] else '',
+            *[f"{p:.2f}" if p != '' else '' for p in (passing[1:] if len(passing) > 1 else [''] * 6)]
+        ])
+
+    out = buf.getvalue().encode('utf-8-sig')  # utf-8-sig สำหรับ Excel ไทย
+    resp = make_response(out)
+    resp.headers['Content-Type'] = 'text/csv; charset=utf-8'
+    resp.headers['Content-Disposition'] = f'attachment; filename="aggnet_history_{datetime.datetime.now().strftime("%Y%m%d")}.csv"'
+    return resp
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    """สร้างบัญชีบริษัทใหม่ (ใช้ภายใน / admin เท่านั้น)"""
+    MSG_PAGE = """<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+    <style>body{font-family:'Sarabun',sans-serif;display:flex;align-items:center;
+    justify-content:center;min-height:100vh;background:#f0f4f8;}
+    .card{background:white;border-radius:16px;padding:36px;width:380px;
+    box-shadow:0 4px 20px rgba(0,0,0,.1);}
+    h1{color:#1a365d;margin-bottom:20px;font-size:1.2rem;}
+    label{font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px;}
+    input{width:100%;padding:10px;border:1.5px solid #e2e8f0;border-radius:8px;
+    font-family:inherit;font-size:1rem;margin-bottom:14px;}
+    .btn{width:100%;padding:12px;background:#276749;color:white;border:none;
+    border-radius:8px;font-family:inherit;font-weight:700;cursor:pointer;}
+    .msg{padding:10px;border-radius:8px;margin-bottom:14px;font-size:.9rem;}
+    .ok{background:#c6f6d5;color:#276749;} .err{background:#fff5f5;color:#c53030;}
+    </style></head><body><div class="card">
+    <h1>➕ เพิ่มบริษัทใหม่</h1>
+    {% if msg %}<div class="msg {{ cls }}">{{ msg }}</div>{% endif %}
+    <form method="POST">
+      <label>ชื่อบริษัท</label><input name="name" required>
+      <label>Username</label><input name="username" required>
+      <label>Password</label><input type="password" name="password" required>
+      <button class="btn">สร้างบัญชี</button>
+    </form></div></body></html>"""
+
+    msg, cls = None, 'ok'
+    if request.method == 'POST':
+        name     = request.form.get('name', '').strip()
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        if DB_ENABLED:
+            try:
+                aggnet_db.create_company(name, username, password)
+                msg, cls = f'สร้างบัญชี "{name}" สำเร็จ', 'ok'
+            except Exception as e:
+                msg, cls = f'Error: {e}', 'err'
+        else:
+            msg, cls = 'DB ไม่พร้อม', 'err'
+    return render_template_string(MSG_PAGE, msg=msg, cls=cls)
 
 if __name__ == '__main__':
     print(f"\n{'='*50}")

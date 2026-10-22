@@ -23,3 +23,7 @@ venv/
 *.docx
 *.pptx
 *.pdf
+
+# secrets — never commit
+.env
+config_secret.py
