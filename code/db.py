@@ -20,7 +20,11 @@ DB_URL = os.environ.get(
 )
 
 def get_conn():
-    return psycopg2.connect(DB_URL, connect_timeout=10)
+    conn = psycopg2.connect(DB_URL, connect_timeout=10)
+    with conn.cursor() as cur:
+        cur.execute("SET TIME ZONE 'Asia/Bangkok'")
+    conn.commit()
+    return conn
 
 # ── Init Tables ──────────────────────────────────────────────────────────────
 INIT_SQL = """
