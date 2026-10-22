@@ -884,7 +884,7 @@ def analyze():
                     fm             = round(float(fm), 2),
                     sieve_data     = sieve_table,
                     zones_data     = zones_out,
-                    image_filename = image.filename,
+                    image_filename = file.filename,
                 )
             except Exception as _db_save_err:
                 print(f"DB save error: {_db_save_err}")  # ไม่ crash app
