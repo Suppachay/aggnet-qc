@@ -987,7 +987,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
               margin-bottom: 20px; }
     .topbar h1 { font-size: 1.1rem; }
     .topbar a { color: #90cdf4; text-decoration: none; font-size: 0.9rem; }
-    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
     select, input[type=date] { padding: 8px 12px; border: 1.5px solid #e2e8f0;
                                 border-radius: 8px; font-family: inherit; font-size: 0.9rem; }
     .btn-sm { padding: 8px 16px; background: #2b6cb0; color: white; border: none;
@@ -997,13 +997,49 @@ HISTORY_PAGE = """<!DOCTYPE html>
             border-collapse: collapse; overflow: hidden;
             box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
     th { background: #2b6cb0; color: white; padding: 10px 14px; text-align: left; font-size: 0.85rem; }
-    td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-size: 0.9rem; }
+    td { padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-size: 0.9rem; vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #ebf8ff; }
+    tr:hover td { background: #ebf8ff; cursor: pointer; }
     .badge { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
     .b34 { background: #bee3f8; color: #2b6cb0; }
     .b38 { background: #c6f6d5; color: #276749; }
     .empty { text-align: center; padding: 40px; color: #718096; }
+    .action-btns { display: flex; gap: 6px; flex-wrap: nowrap; }
+    .btn-view   { padding: 4px 10px; background: #3182ce; color: white; border: none;
+                  border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
+    .btn-pdf    { padding: 4px 10px; background: #e53e3e; color: white; border: none;
+                  border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
+    .btn-edit   { padding: 4px 10px; background: #dd6b20; color: white; border: none;
+                  border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
+    .btn-del    { padding: 4px 10px; background: #718096; color: white; border: none;
+                  border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-family: inherit; }
+    /* Modal */
+    .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+                     background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center; }
+    .modal-overlay.open { display:flex; }
+    .modal { background:white; border-radius:16px; padding:28px; width:90%; max-width:680px;
+             max-height:90vh; overflow-y:auto; position:relative; }
+    .modal h2 { font-size:1.1rem; color:#1a365d; margin-bottom:16px; }
+    .modal-close { position:absolute; top:12px; right:16px; background:none; border:none;
+                   font-size:1.4rem; cursor:pointer; color:#718096; }
+    .detail-meta { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px; }
+    .detail-meta div { background:#f7fafc; border-radius:8px; padding:8px 12px; font-size:0.9rem; }
+    .detail-meta span { color:#718096; font-size:0.8rem; display:block; }
+    .fm-box { background:#ebf8ff; border-radius:8px; padding:12px 16px; margin-bottom:16px;
+              font-size:1.1rem; font-weight:700; color:#2b6cb0; text-align:center; }
+    .dtable { width:100%; border-collapse:collapse; font-size:0.85rem; margin-top:8px; }
+    .dtable th { background:#2b6cb0; color:white; padding:7px 10px; text-align:center; }
+    .dtable td { padding:6px 10px; border-bottom:1px solid #e2e8f0; text-align:center; }
+    .dtable tr:hover td { background:#ebf8ff; }
+    .out-range { color:#e53e3e; font-weight:700; }
+    /* Edit modal */
+    .edit-input { width:100%; padding:10px; border:1.5px solid #e2e8f0; border-radius:8px;
+                  font-family:inherit; font-size:1rem; margin-bottom:12px; }
+    .modal-footer { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+    .btn-save { padding:8px 20px; background:#276749; color:white; border:none;
+                border-radius:8px; font-family:inherit; cursor:pointer; font-weight:700; }
+    .btn-cancel { padding:8px 20px; background:#e2e8f0; color:#4a5568; border:none;
+                  border-radius:8px; font-family:inherit; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -1036,7 +1072,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
     <thead>
       <tr>
         <th>#</th><th>วันที่-เวลา</th><th>ประเภทหิน</th><th>แหล่ง</th>
-        <th>FM</th><th>#4 (%ผ่าน)</th><th>#8 (%ผ่าน)</th>
+        <th>FM</th><th>#4 (%ผ่าน)</th><th>#8 (%ผ่าน)</th><th>การจัดการ</th>
       </tr>
     </thead>
     <tbody>
@@ -1049,10 +1085,18 @@ HISTORY_PAGE = """<!DOCTYPE html>
             {{ '3/4"' if '3_4' in r.agg_type else '3/8"' }}
           </span>
         </td>
-        <td>{{ r.source }}</td>
+        <td class="source-cell" data-id="{{ r.id }}">{{ r.source }}</td>
         <td><b>{{ '%.2f'|format(r.fm) }}</b></td>
-        <td>{{ '%.1f'|format(r.sieve_json[4].passing) if r.sieve_json else '-' }}</td>
-        <td>{{ '%.1f'|format(r.sieve_json[5].passing) if r.sieve_json else '-' }}</td>
+        <td>{{ '%.1f'|format(r.sieve_json[4]['passing']) if r.sieve_json else '-' }}</td>
+        <td>{{ '%.1f'|format(r.sieve_json[5]['passing']) if r.sieve_json else '-' }}</td>
+        <td>
+          <div class="action-btns" onclick="event.stopPropagation()">
+            <button class="btn-view" onclick="viewDetail({{ r.id }})">🔍 ดูผล</button>
+            <button class="btn-pdf"  onclick="downloadPdf({{ r.id }})">📄 PDF</button>
+            <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}')">✏️ แก้ไข</button>
+            <button class="btn-del"  onclick="deleteRow({{ r.id }}, this)">🗑️ ลบ</button>
+          </div>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -1060,6 +1104,98 @@ HISTORY_PAGE = """<!DOCTYPE html>
   {% else %}
   <div class="empty">ยังไม่มีประวัติการวิเคราะห์</div>
   {% endif %}
+
+  <!-- Detail Modal -->
+  <div class="modal-overlay" id="detailModal">
+    <div class="modal">
+      <button class="modal-close" onclick="closeModal('detailModal')">✕</button>
+      <h2 id="modalTitle">ผลการวิเคราะห์</h2>
+      <div class="detail-meta" id="modalMeta"></div>
+      <div class="fm-box" id="modalFM"></div>
+      <table class="dtable">
+        <thead>
+          <tr><th>ตะแกรง</th><th>%ผ่าน</th><th>Ind.Ret%</th><th>Cu.Ret%</th></tr>
+        </thead>
+        <tbody id="modalSieve"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="modal-overlay" id="editModal">
+    <div class="modal" style="max-width:420px">
+      <button class="modal-close" onclick="closeModal('editModal')">✕</button>
+      <h2>✏️ แก้ไขแหล่งหิน</h2>
+      <input type="hidden" id="editId">
+      <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:6px">แหล่งหิน (Source)</label>
+      <input class="edit-input" type="text" id="editSource">
+      <div class="modal-footer">
+        <button class="btn-cancel" onclick="closeModal('editModal')">ยกเลิก</button>
+        <button class="btn-save" onclick="saveEdit()">บันทึก</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('open');
+    }
+
+    async function viewDetail(id) {
+      const res = await fetch('/history/' + id + '/detail');
+      if (!res.ok) { alert('ไม่พบข้อมูล'); return; }
+      const d = await res.json();
+      document.getElementById('modalTitle').textContent =
+        'ผลการวิเคราะห์ — ' + (d.agg_type.includes('3_4') ? 'หิน 3/4"' : 'หิน 3/8"');
+      document.getElementById('modalMeta').innerHTML =
+        '<div><span>วันที่-เวลา</span>' + d.analyzed_at + '</div>' +
+        '<div><span>แหล่งหิน</span>' + (d.source || '-') + '</div>';
+      document.getElementById('modalFM').textContent = 'Fineness Modulus (FM): ' + d.fm.toFixed(2);
+      const sieves = ['1"','3/4"','1/2"','3/8"','#4','#8','Pan'];
+      let rows = '';
+      (d.sieve_json || []).forEach((s, i) => {
+        rows += '<tr><td>' + sieves[i] + '</td><td>' + s.passing.toFixed(2) +
+                '</td><td>' + s.ind_ret.toFixed(2) + '</td><td>' + s.cu_ret.toFixed(2) + '</td></tr>';
+      });
+      document.getElementById('modalSieve').innerHTML = rows;
+      document.getElementById('detailModal').classList.add('open');
+    }
+
+    function downloadPdf(id) {
+      window.open('/history/' + id + '/pdf', '_blank');
+    }
+
+    function openEdit(id, source) {
+      document.getElementById('editId').value = id;
+      document.getElementById('editSource').value = source;
+      document.getElementById('editModal').classList.add('open');
+    }
+
+    async function saveEdit() {
+      const id  = document.getElementById('editId').value;
+      const src = document.getElementById('editSource').value.trim();
+      const res = await fetch('/history/' + id + '/edit', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({source: src})
+      });
+      if (res.ok) {
+        // อัพเดต cell โดยไม่ reload
+        document.querySelectorAll('.source-cell').forEach(td => {
+          if (td.dataset.id == id) td.textContent = src;
+        });
+        closeModal('editModal');
+      } else { alert('บันทึกไม่สำเร็จ'); }
+    }
+
+    async function deleteRow(id, btn) {
+      if (!confirm('ยืนยันลบรายการนี้?')) return;
+      const res = await fetch('/history/' + id + '/delete', {method: 'POST'});
+      if (res.ok) {
+        btn.closest('tr').remove();
+      } else { alert('ลบไม่สำเร็จ'); }
+    }
+  </script>
 </body>
 </html>"""
 
@@ -1110,6 +1246,76 @@ def history():
         filter_from  = filter_from,
         filter_to    = filter_to,
     )
+
+@app.route('/history/<int:aid>/detail')
+def history_detail(aid):
+    if not session.get('company_id'):
+        return jsonify({'error': 'unauthorized'}), 401
+    if not DB_ENABLED:
+        return jsonify({'error': 'db disabled'}), 503
+    import json as _json
+    row = aggnet_db.get_analysis_by_id(aid, session['company_id'])
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    sieve = row['sieve_json']
+    if isinstance(sieve, str):
+        sieve = _json.loads(sieve)
+    return jsonify({
+        'id':          row['id'],
+        'analyzed_at': row['analyzed_at'].strftime('%d/%m/%Y %H:%M'),
+        'agg_type':    row['agg_type'],
+        'source':      row['source'],
+        'fm':          row['fm'],
+        'sieve_json':  sieve,
+    })
+
+@app.route('/history/<int:aid>/pdf')
+def history_pdf(aid):
+    if not session.get('company_id'):
+        return redirect(url_for('login'))
+    if not DB_ENABLED:
+        return 'DB disabled', 503
+    import json as _json
+    row = aggnet_db.get_analysis_by_id(aid, session['company_id'])
+    if not row:
+        return 'Not found', 404
+    sieve = row['sieve_json']
+    if isinstance(sieve, str):
+        sieve = _json.loads(sieve)
+    # reconstruct pred_6 from sieve_json (indices 1-6 = 3/4" ถึง Pan)
+    pred_6 = np.array([s['passing'] for s in sieve[1:]])
+    agg_type    = row['agg_type']
+    source      = row['source'] or ''
+    tested_date = row['analyzed_at'].strftime('%Y-%m-%d')
+    tested_time = row['analyzed_at'].strftime('%H:%M')
+    chart_buf = generate_chart(pred_6, source, agg_type=agg_type)
+    pdf_buf   = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf)
+    fname = f"AggNet_Report_{tested_date}_{aid}.pdf"
+    pdf_bytes = pdf_buf.read()
+    response = make_response(pdf_bytes)
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Disposition'] = f'attachment; filename="{fname}"'
+    return response
+
+@app.route('/history/<int:aid>/edit', methods=['POST'])
+def history_edit(aid):
+    if not session.get('company_id'):
+        return jsonify({'error': 'unauthorized'}), 401
+    if not DB_ENABLED:
+        return jsonify({'error': 'db disabled'}), 503
+    data   = request.get_json()
+    source = (data.get('source') or '').strip()
+    ok = aggnet_db.update_analysis_source(aid, session['company_id'], source)
+    return ('', 200) if ok else ('Not found', 404)
+
+@app.route('/history/<int:aid>/delete', methods=['POST'])
+def history_delete(aid):
+    if not session.get('company_id'):
+        return jsonify({'error': 'unauthorized'}), 401
+    if not DB_ENABLED:
+        return jsonify({'error': 'db disabled'}), 503
+    ok = aggnet_db.delete_analysis(aid, session['company_id'])
+    return ('', 200) if ok else ('Not found', 404)
 
 @app.route('/export')
 def export_csv():

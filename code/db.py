@@ -156,6 +156,30 @@ def get_analysis_by_id(analysis_id: int, company_id: int):
             )
             return cur.fetchone()
 
+def delete_analysis(analysis_id: int, company_id: int) -> bool:
+    """ลบผลวิเคราะห์ (เช็ค company_id ด้วย) คืน True ถ้าลบสำเร็จ"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM analyses WHERE id=%s AND company_id=%s",
+                (analysis_id, company_id)
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted > 0
+
+def update_analysis_source(analysis_id: int, company_id: int, source: str) -> bool:
+    """แก้ไขแหล่งหิน คืน True ถ้าสำเร็จ"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE analyses SET source=%s WHERE id=%s AND company_id=%s",
+                (source, analysis_id, company_id)
+            )
+            updated = cur.rowcount
+        conn.commit()
+    return updated > 0
+
 def get_fm_trend(company_id: int, agg_type: str, days: int = 30):
     """FM trend สำหรับ dashboard chart"""
     with get_conn() as conn:
