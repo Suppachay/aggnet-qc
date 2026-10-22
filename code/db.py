@@ -16,7 +16,7 @@ import os
 # ใส่ password ที่ตั้งไว้ตอนสร้าง Supabase project
 DB_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://postgres:Un-kE9+fy8CrR2-@db.ybjmqizmixrqwkgreyer.supabase.co:5432/postgres"
+    "postgresql://postgres.ybjmqizmixrqwkgreyer:Un-kE9+fy8CrR2-@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"
 )
 
 def get_conn():
