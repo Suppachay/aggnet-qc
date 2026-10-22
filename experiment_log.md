@@ -1127,5 +1127,81 @@ Pool: 123 samples | Test (held out): 12
 | `validate_dataset.py` ไม่มี | ไม่ได้ commit ไว้ใน repo (อยู่แต่บน Marimo เดิม) | ตรวจสอบ dataset ด้วย Python inline แทน |
 | `aggnet_dataset4.py` ไม่รับ `--data_dir` argument | Script ใช้ hardcoded path ไม่มี argparse | สร้าง copy ใหม่ด้วย `sed` แทนที่ path ทั้งหมด |
 | RAILAB ล่ม (ERR_CONNECTION_RESET) ระหว่างทำงาน | Server-side ชั่วคราว | รอ reload |
+| `launch_bg()` cell ค้าง >25 นาทีตอน launch web app | `launch_bg` ใช้ `subprocess.run()` — redirect `> app.log` ทำให้ pipe ไม่ปิดจนกว่า process จะตาย (blocking) | ใช้ `os.system("nohup ... > app.log 2>&1 &")` แทน — return ทันที |
+| Port 5000 already in use ตอน restart app | Old process จาก session ก่อนยังรันอยู่ | `subprocess.run(["pkill", "-f", "app_aggnet_qc"])` (`fuser` ไม่มีบน container นี้) |
+| Marimo error "redefines variables from other cells" | ตัวแปร `result` นิยามซ้ำใน cell-11 | เปลี่ยนชื่อตัวแปรใน cell ใหม่ (เช่น `pull_out`) |
 
 <!-- เพิ่ม Run ใหม่ด้านล่างนี้ -->
+
+---
+
+## Session 8 — 2026-10-22 (Web App Features: History, PDF, doc_no, Sort, Date Fix)
+
+### สรุปการเปลี่ยนแปลงทั้งหมด
+
+#### 1. Placeholder ชื่อแหล่งหิน
+- เปลี่ยน `<input placeholder>` จาก `"ART CONCRETE COMPANY LIMITED"` → `"เช่น บริษัท ศิลาสานนท์ จำกัด"`
+
+#### 2. ระบบบันทึก DB (bug fix)
+- **Bug:** `/analyze` route ใช้ `image.filename` แต่ตัวแปรชื่อ `file` → `NameError: name 'image' is not defined`
+- **Fix:** เปลี่ยนเป็น `image_filename = file.filename`
+
+#### 3. History Page — ฟีเจอร์ครบ
+เพิ่ม route และปุ่มใหม่ 4 อย่าง:
+| Route | Method | ฟังก์ชัน |
+|---|---|---|
+| `/history/<id>/detail` | GET | ดูผลละเอียด (JSON → modal) |
+| `/history/<id>/pdf` | GET | ดาวน์โหลด PDF จาก DB |
+| `/history/<id>/reanalyze` | POST | วิเคราะห์ใหม่ด้วยภาพใหม่ อัพเดต DB เก่า |
+| `/history/<id>/delete` | POST | ลบ record |
+
+- ลบ column #4 (%ผ่าน) และ #8 (%ผ่าน) ออกจาก history table
+
+#### 4. เวลา 12h AM/PM + Timezone UTC+7
+- เพิ่ม `to_12h(time_str)` helper: แปลง `HH:MM` → `12:15 PM`
+- ใช้กับ PDF, CSV export, history table
+- แก้ timezone: เพิ่ม `SET TIME ZONE 'Asia/Bangkok'` ใน `get_conn()` ของ db.py → เวลาใน DB ถูกต้องเป็น UTC+7
+
+#### 5. ระบบเลขที่เอกสาร (doc_no)
+- format: `{YEAR}-{SEQ:04d}` เช่น `2026-0001` นับต่อเนื่องต่อปีต่อบริษัท
+- `generate_doc_no(company_id)` ใน db.py — นับจาก COUNT ใน DB ปีปัจจุบัน
+- บันทึกลง `analyses.doc_no` (เพิ่ม column ด้วย `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`)
+- แสดงใน: column หน้า history, detail modal, มุมบนขวาของ PDF
+
+#### 6. Sort ที่หัวตาราง History
+- คลิกหัว column: `#`, `เลขที่`, `วันที่-เวลา`, `ประเภทหิน`, `แหล่ง`, `FM` → sort ได้
+- คลิกซ้ำ = reverse sort (toggle asc/desc)
+- ใช้ client-side JS `sortTable(col)` — ไม่ต้อง reload หน้า
+
+#### 7. บันทึก tested_date และ tested_time ลง DB
+- **ปัญหา:** user เลือกวันที่ 21 แต่ history แสดง 22 (วันที่ `analyzed_at = NOW()`)
+- **Fix:** เพิ่ม column `tested_date DATE` และ `tested_time VARCHAR(20)` ใน analyses table
+- บันทึกจากฟอร์มใน `/analyze` route → ส่งไป `save_analysis(tested_date, tested_time)`
+- History table และ history PDF ใช้ `tested_date`/`tested_time` แทน `analyzed_at` (fallback ถ้า NULL)
+- Date filter ใช้ `COALESCE(tested_date, analyzed_at::date)` เพื่อค้นหาด้วยวันที่ที่ผู้ใช้เลือก
+
+---
+
+### ไฟล์ที่เปลี่ยน
+
+| ไฟล์ | การเปลี่ยนแปลง |
+|---|---|
+| `code/app_aggnet_qc.py` | placeholder, to_12h(), generate_pdf(doc_no), /analyze route, history routes ครบ, sort JS, tested_date/time ใน history |
+| `code/db.py` | get_conn() timezone, INIT_SQL (doc_no, tested_date, tested_time), generate_doc_no(), save_analysis(), update_analysis(), get_analyses(), delete_analysis(), date filter COALESCE |
+
+### Cloudflare Named Tunnel
+- URL ถาวร: `app.aggnet-qc.com`
+- ใช้ named tunnel ผ่าน token: `cloudflared tunnel run --token <TOKEN>`
+- Token อาจหมดอายุ — ถ้า Error 1033 ให้กด **Rotate token** ใน Cloudflare dashboard แล้วใช้ token ใหม่
+- ⚠️ RAILAB reset session → ต้อง download cloudflared + start tunnel + start Flask ใหม่ทุกครั้ง
+
+### ปัญหาที่เจอใน Session 8
+
+| ปัญหา | สาเหตุ | วิธีแก้ |
+|---|---|---|
+| DB save error: `name 'image' is not defined` | typo ในโค้ด ใช้ `image.filename` แทน `file.filename` | แก้เป็น `file.filename` |
+| Cloudflare Error 1033 | Named tunnel token expired/invalid | Rotate token ใน dashboard แล้วรัน tunnel ด้วย token ใหม่ |
+| Marimo "redefines variables" สำหรับ `subprocess` | Reactive notebook ห้าม define ซ้ำข้าม cell | Wrap ทุกอย่างใน function |
+| `git commit` ล้มเหลว — HEAD.lock | Sandbox sandbox sandbox ขัดกัน | `Remove-Item ".git\HEAD.lock"` ใน PowerShell ก่อน commit |
+| วันที่ใน history ผิด (21 → 22) | `analyzed_at = NOW()` ไม่ใช่วันที่ที่ user เลือก | เพิ่ม `tested_date`/`tested_time` column บันทึกจากฟอร์ม |
+| Filter วันที่ 21 ไม่เจอ record | Filter ใช้ `analyzed_at` แต่ record มี `tested_date=21, analyzed_at=22` | เปลี่ยน WHERE เป็น `COALESCE(tested_date, analyzed_at::date)` |

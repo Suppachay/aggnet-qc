@@ -372,21 +372,80 @@ def launch_bg(cmd):
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL)
 
-launch_bg("cd /workspace/AggNet && nohup python3 code/aggnet_dataset3.py > outputs/dataset3/train.log 2>&1 < /dev/null &")
+launch_bg("cd /workspace/AggNet && nohup python3 code/aggnet_dataset4.py > outputs/dataset4/train.log 2>&1 < /dev/null &")
 ```
 ถ้า cell ค้างไปแล้ว (เผลอใช้ `run()`/`capture_output=True`) กด **Stop/Interrupt cell** ได้เลย — process ที่ `nohup` ไปแล้วไม่ตายตาม (detach จาก cell/kernel แล้ว รอด reconnect/restart kernel ได้ด้วย) เช็คสถานะจริงด้วย `ps aux | grep python3`
 
-### เข้าถึง Web App จากภายนอก (RAILAB ไม่มี port forwarding ในตัว)
-เช็คแล้ว — Marimo settings (Display/Packages/Runtime/AI/Labs) ไม่มี Ports/Network section เลย ใช้ **Cloudflare Tunnel** แทน (ไม่ต้องสมัครบัญชี):
+⚠️ **Web app ต้องใช้ `os.system` ไม่ใช่ `launch_bg`** (2026-10-12) — `launch_bg` ใช้ `subprocess.run()` ซึ่ง block เมื่อ redirect output ไปไฟล์ (`> app.log`) เพราะ pipe ไม่ปิด ให้ใช้:
 ```python
-run("cd /workspace/AggNet && curl -L --output cloudflared "
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 "
-    "&& chmod +x cloudflared")
-launch_bg("cd /workspace/AggNet && nohup ./cloudflared tunnel --url http://localhost:5000 "
-          "> outputs/dataset3/tunnel.log 2>&1 < /dev/null &")
-run("sleep 10 && grep -o 'https://[a-zA-Z0-9.-]*trycloudflare.com' /workspace/AggNet/outputs/dataset3/tunnel.log")
+import os
+# Kill old process ก่อน (fuser ไม่มีบน container นี้)
+subprocess.run(["pkill", "-f", "app_aggnet_qc"], capture_output=True)
+# Launch ด้วย os.system (return ทันที)
+os.system("nohup python3 /workspace/AggNet/code/app_aggnet_qc.py "
+          "> /workspace/AggNet/outputs/dataset4/app.log 2>&1 &")
+# เช็ค log
+run("tail -20 /workspace/AggNet/outputs/dataset4/app.log")
 ```
-⚠️ URL แบบนี้**ชั่วคราว** (เปลี่ยนทุกครั้งที่รันใหม่, ไม่มี auth, หายเมื่อปิด session) — ใช้ demo/ทดสอบเท่านั้น ห้ามใช้จริงกับลูกค้า (ดูแผน production deployment ใน `experiment_log.md` Session 4 ข้อ 9)
+
+### เข้าถึง Web App จากภายนอก (RAILAB ไม่มี port forwarding ในตัว)
+
+**ปัจจุบัน (2026-10-22): ใช้ Cloudflare Named Tunnel — URL ถาวร `app.aggnet-qc.com`**
+
+```python
+# ดาวน์โหลด cloudflared (ถ้า container ใหม่)
+run("wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 "
+    "-O /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared")
+
+# Start named tunnel ด้วย token จาก Cloudflare dashboard
+launch_bg(f"cloudflared tunnel run --token {TOKEN} &")
+```
+
+**TOKEN:** เก็บใน Marimo cell ชื่อ `TOKEN` — ถ้า Error 1033 ให้กด **Rotate token** ใน Cloudflare dashboard (`Zero Trust → Networks → Tunnels → aggnet-qc → Edit → Rotate token`) แล้วอัพเดต cell TOKEN ใหม่
+
+⚠️ **RAILAB reset session ทุกครั้ง:** ต้อง download cloudflared + start tunnel + start Flask ใหม่เสมอ
+
+**Startup sequence หลัง session reset:**
+```python
+# 1. Start Flask
+run("pkill -f app_aggnet_qc.py; sleep 2")
+launch_bg("python /workspace/AggNet/code/app_aggnet_qc.py > /workspace/AggNet/app.log 2>&1 &")
+# 2. Start Cloudflare tunnel
+run("pkill -f cloudflared; sleep 1")
+launch_bg(f"cloudflared tunnel run --token {TOKEN} &")
+# 3. ตรวจสอบ
+run("sleep 3 && tail -5 /workspace/AggNet/app.log")
+```
+
+**เดิม (ชั่วคราว):** trycloudflare.com URL (ไม่ใช้แล้ว)
+
+### Web App (`app_aggnet_qc.py`) — สถานะปัจจุบัน (2026-10-22)
+
+**URL:** `https://app.aggnet-qc.com`
+**Port:** 5000 (Flask dev server)
+**Auth:** Multi-company login — `session['company_id']`, `session['company_name']`
+**DB:** Supabase PostgreSQL Transaction Pooler `aws-0-ap-southeast-2.pooler.supabase.com:6543` (IPv4)
+
+**ฟีเจอร์ปัจจุบัน:**
+- วิเคราะห์ภาพหิน → Sieve Table + Gradation Chart + FM
+- ดาวน์โหลด PDF Report (Thai font Sarabun, เลขที่เอกสารมุมบนขวา)
+- หน้าประวัติ `/history`: ดูผล, PDF, แก้ไข/วิเคราะห์ใหม่, ลบ, Export CSV
+- ระบบเลขที่เอกสาร `doc_no` format `{YEAR}-{SEQ:04d}` (เช่น `2026-0001`)
+- เวลา 12h AM/PM, Timezone Asia/Bangkok (UTC+7)
+- Sort หัวตาราง History (client-side JS)
+- Filter ประวัติตามวันที่ (ใช้ `tested_date` ที่ user เลือก ไม่ใช่ `analyzed_at`)
+
+**DB Schema — ตาราง analyses:**
+```sql
+id, company_id, analyzed_at (TIMESTAMPTZ), agg_type, source, fm,
+sieve_json (JSONB), zones_json (JSONB), image_filename,
+doc_no VARCHAR(50), tested_date DATE, tested_time VARCHAR(20)
+```
+
+**Helper functions สำคัญ:**
+- `to_12h(time_str)` — แปลง HH:MM → 12:15 PM
+- `generate_doc_no(company_id)` — นับ COUNT ปีปัจจุบัน → `2026-0001`
+- `get_conn()` — SET TIME ZONE 'Asia/Bangkok' ทุก connection
 
 ### Package ที่ต้องติดตั้งเพิ่มบน environment ใหม่ (ไม่มีติดมากับ image)
 ```
@@ -403,14 +462,21 @@ apt-get update && apt-get install -y p7zip-full   # ถ้าต้องแต�
 ## สิ่งที่ยังไม่ได้ทำ / TODO
 
 ### Priority สูง (ทำก่อน)
-- [ ] **รอผล Run 11** (dataset4, 469 samples, A100) — ยังรันอยู่ ณ 2026-10-11
-- [ ] หลัง Run 11 เสร็จ: อัปเดต web app ให้โหลด `models/dataset4/aggnet_34_best.pth` + `aggnet_38_best.pth`
 - [ ] **เพิ่มข้อมูล Aggregate 1 inch** ให้ถึง ≥ 7 samples เพื่อเปิด train Model C (ยังมีแค่ 1 sample)
 - [ ] Deploy web app ขึ้น production จริง (Fly.io/Cloud Run + Basic Auth)
 - [ ] Confirm label ซ้ำใหม่ 4 sample (240,259,344,345) กับทีมเก็บข้อมูล
 - [ ] หาไฟล์ภาพ `Sample_330`, `Sample_354`, `Sample_421` ที่หายใน dataset4 หรือลบ row ออก
 - [ ] ขอ ASTM C33 size class + Control range ของ Model B (No4/No8) เพื่อทำ Production Ratio analysis ให้ครบ
+- [ ] ปรับปรุง Model A (3/4") — Sample Acc ยังต่ำ ~42% เพราะข้อมูลหลาย source; ลอง source-stratified augmentation หรือเพิ่ม data
+- [x] ~~Run 11 (dataset4, 469 samples, A100)~~ — เสร็จ 2026-10-12, Model A MAE 5.22%, Model B MAE 3.07%
+- [x] ~~อัปเดต web app ให้โหลด dataset4 models~~ — `app_aggnet_qc.py` ชี้ไป `models/dataset4/` แล้ว (2026-10-12)
 - [x] ~~อัปเดต Web App~~ — ใช้ CBAM+MT model, Report 3/8" ตัด 1"/3/4" แล้ว; ลบสูตร FM จาก PDF; Thai font (Sarabun); default time = ปัจจุบัน
+- [x] ~~History page ครบ~~ — ดูผล modal, PDF, re-analyze, delete, Export CSV (2026-10-22)
+- [x] ~~ระบบเลขที่เอกสาร (doc_no)~~ — `2026-0001` format, แสดงใน PDF + history + modal (2026-10-22)
+- [x] ~~Timezone fix (UTC→UTC+7)~~ — `SET TIME ZONE 'Asia/Bangkok'` ใน get_conn() (2026-10-22)
+- [x] ~~Sort ที่หัวตาราง history~~ — client-side JS, toggle asc/desc (2026-10-22)
+- [x] ~~บันทึก tested_date/tested_time ลง DB~~ — filter ใช้ COALESCE(tested_date, analyzed_at::date) (2026-10-22)
+- [x] ~~Cloudflare Named Tunnel (URL ถาวร)~~ — `app.aggnet-qc.com` (2026-10-22)
 - [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว
 - [x] ~~k-fold cross-validation~~ — implement แล้ว 2026-08-15 (`train_kfold()`)
 - [x] ~~เพิ่มข้อมูล 339 → 469 samples (dataset4)~~ — dataset4 พร้อมแล้ว, Run 11 กำลังรัน
