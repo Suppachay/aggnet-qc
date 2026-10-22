@@ -69,17 +69,20 @@ def init_db():
 
 # ── Companies ────────────────────────────────────────────────────────────────
 def generate_doc_no(company_id: int) -> str:
-    """สร้างเลขที่เอกสาร {YEAR}-{SEQ:04d} เช่น 2026-0001"""
+    """สร้างเลขที่เอกสาร {YEAR}-{SEQ:04d} เช่น 2026-0001 (ใช้ MAX ไม่ใช่ COUNT เพื่อป้องกันเลขซ้ำเมื่อลบ)"""
     import datetime as _dt
     year = _dt.datetime.now().year
+    prefix = f"{year}-"
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM analyses WHERE company_id=%s AND EXTRACT(YEAR FROM analyzed_at)=%s",
-                (company_id, year)
+                "SELECT MAX(CAST(SUBSTRING(doc_no FROM %s) AS INTEGER)) "
+                "FROM analyses WHERE company_id=%s AND doc_no LIKE %s",
+                (len(prefix) + 1, company_id, prefix + '%')
             )
-            count = cur.fetchone()[0]
-    return f"{year}-{count+1:04d}"
+            max_seq = cur.fetchone()[0]
+    next_seq = (max_seq or 0) + 1
+    return f"{year}-{next_seq:04d}"
 
 def create_company(name: str, username: str, password: str) -> int:
     """สร้างบัญชีบริษัทใหม่ คืน id"""
