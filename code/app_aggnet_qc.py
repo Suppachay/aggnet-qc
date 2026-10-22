@@ -100,6 +100,32 @@ except Exception as _db_err:
     print(f"DB: disabled ({_db_err})")
 
 # ─────────────────────────────────────────────
+# UPLOAD FOLDER (เก็บรูปภาพหินตาม doc_no)
+# ─────────────────────────────────────────────
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'uploads')
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def save_image_file(image_file, company_id, doc_no):
+    """บันทึกรูปภาพลงดิสก์ คืน path สัมพัทธ์"""
+    folder = os.path.join(UPLOAD_DIR, str(company_id))
+    os.makedirs(folder, exist_ok=True)
+    ext = os.path.splitext(image_file.filename)[1] or '.jpg'
+    fname = f"{doc_no}{ext}"
+    fpath = os.path.join(folder, fname)
+    image_file.stream.seek(0)
+    image_file.save(fpath)
+    return fpath
+
+def get_image_path(company_id, doc_no, original_filename=''):
+    """หา path รูปภาพจาก doc_no"""
+    folder = os.path.join(UPLOAD_DIR, str(company_id))
+    for ext in ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']:
+        p = os.path.join(folder, f"{doc_no}{ext}")
+        if os.path.exists(p):
+            return p
+    return None
+
+# ─────────────────────────────────────────────
 # MODEL (import from aggnet_dataset4.py)
 # ─────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -274,7 +300,7 @@ def to_12h(time_str):
     except Exception:
         return time_str
 
-def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, doc_no=None):
+def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, doc_no=None, image_path=None):
     """สร้าง PDF Report ตาม format SIEVE ANALYSIS AGGREGATE"""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -471,6 +497,15 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, 
         ]))
         story.append(ratio_tbl)
         story.append(Spacer(1, 4*mm))
+
+    # ── Sample Image ──
+    if image_path and os.path.exists(image_path):
+        story.append(Spacer(1, 4*mm))
+        story.append(Paragraph('<b>ภาพตัวอย่างหิน (Sample Image)</b>',
+                                ParagraphStyle('img_hd', fontSize=9, fontName=_THAI_FONT)))
+        story.append(Spacer(1, 2*mm))
+        story.append(RLImage(image_path, width=80*mm, height=60*mm, kind='proportional'))
+        story.append(Spacer(1, 3*mm))
 
     # ── Footer ──
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
@@ -909,6 +944,9 @@ def analyze():
                     tested_date    = tested_date,
                     tested_time    = to_12h(tested_time),
                 )
+                # บันทึกรูปภาพลงดิสก์ชื่อ doc_no
+                if _doc_no:
+                    save_image_file(file, session['company_id'], _doc_no)
             except Exception as _db_save_err:
                 print(f"DB save error: {_db_save_err}")  # ไม่ crash app
 
@@ -1123,6 +1161,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
             <button class="btn-pdf"  onclick="downloadPdf({{ r.id }})">📄 PDF</button>
             <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}', '{{ r.agg_type }}', '{% if r.tested_date %}{{ r.tested_date.strftime("%Y-%m-%d") }}{% endif %}', '{{ r.tested_time or "" }}')">✏️ แก้ไข</button>
             <button class="btn-del"  onclick="deleteRow({{ r.id }}, this)">🗑️ ลบ</button>
+            <button class="btn-lab"  onclick="openLabel({{ r.id }}, '{{ r.doc_no or '' }}')">📊 Lab</button>
           </div>
         </td>
       </tr>
@@ -1183,7 +1222,61 @@ HISTORY_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Lab Label Modal -->
+  <div class="modal-overlay" id="labelModal">
+    <div class="modal" style="max-width:480px">
+      <button class="modal-close" onclick="closeModal('labelModal')">✕</button>
+      <h2>📊 บันทึก Lab Label (Sieve จริง)</h2>
+      <p style="font-size:.85rem;color:#718096;margin:0 0 12px">เลขที่เอกสาร: <b id="labelDocNo">-</b></p>
+      <input type="hidden" id="labelId">
+      <table style="width:100%;border-collapse:collapse;margin-bottom:14px">
+        <thead>
+          <tr style="background:#2b6cb0;color:#fff">
+            <th style="padding:7px 10px;text-align:left">ตะแกรง</th>
+            <th style="padding:7px 10px;text-align:center">น้ำหนักค้าง (g)</th>
+            <th style="padding:7px 10px;text-align:center">%ผ่าน</th>
+          </tr>
+        </thead>
+        <tbody id="labelSieveTbody">
+          <tr><td style="padding:6px 10px">1"</td>
+              <td><input type="number" step="0.01" min="0" id="lw0" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp0" class="lab-inp" placeholder="100"></td></tr>
+          <tr><td style="padding:6px 10px">3/4"</td>
+              <td><input type="number" step="0.01" min="0" id="lw1" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp1" class="lab-inp" placeholder=""></td></tr>
+          <tr><td style="padding:6px 10px">1/2"</td>
+              <td><input type="number" step="0.01" min="0" id="lw2" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp2" class="lab-inp" placeholder=""></td></tr>
+          <tr><td style="padding:6px 10px">3/8"</td>
+              <td><input type="number" step="0.01" min="0" id="lw3" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp3" class="lab-inp" placeholder=""></td></tr>
+          <tr><td style="padding:6px 10px">#4</td>
+              <td><input type="number" step="0.01" min="0" id="lw4" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp4" class="lab-inp" placeholder=""></td></tr>
+          <tr><td style="padding:6px 10px">#8</td>
+              <td><input type="number" step="0.01" min="0" id="lw5" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp5" class="lab-inp" placeholder=""></td></tr>
+          <tr><td style="padding:6px 10px">Pan</td>
+              <td><input type="number" step="0.01" min="0" id="lw6" class="lab-inp" placeholder="0"></td>
+              <td><input type="number" step="0.01" min="0" max="100" id="lp6" class="lab-inp" placeholder="0"></td></tr>
+        </tbody>
+      </table>
+      <div style="margin-bottom:12px">
+        <label style="font-size:.85rem;color:#4a5568;font-weight:600">น้ำหนักรวม (g)</label>
+        <input type="number" step="0.01" min="0" id="labelWeightTotal" class="lab-inp" style="width:100%;margin-top:4px" placeholder="เช่น 500.00">
+      </div>
+      <div id="labelStatus" style="font-size:.85rem;color:#718096;min-height:18px;margin-bottom:8px"></div>
+      <div class="modal-footer">
+        <button class="btn-cancel" onclick="closeModal('labelModal')">ยกเลิก</button>
+        <button class="btn-save" id="labelSaveBtn" onclick="saveLabel()">💾 บันทึก Label</button>
+      </div>
+    </div>
+  </div>
+
   <style>
+    .lab-inp { width:100%;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-family:inherit;font-size:.9rem;text-align:right }
+    .btn-lab  { background:#6b46c1;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.82rem;white-space:nowrap }
+    .btn-lab:hover { background:#553c9a }
     #historyTable th[onclick]:hover { background:#1a365d; }
     #historyTable th .sort-icon { opacity:0.5; font-size:.8em; }
     #historyTable th.asc .sort-icon::after  { content:'▲'; }
@@ -1299,6 +1392,52 @@ HISTORY_PAGE = """<!DOCTYPE html>
         btn.closest('tr').remove();
       } else { alert('ลบไม่สำเร็จ'); }
     }
+
+    function openLabel(id, docNo) {
+      document.getElementById('labelId').value = id;
+      document.getElementById('labelDocNo').textContent = docNo || '-';
+      // ล้างค่าเดิม
+      for (let i = 0; i <= 6; i++) {
+        const wi = document.getElementById('lw' + i);
+        const pi = document.getElementById('lp' + i);
+        if (wi) wi.value = '';
+        if (pi) pi.value = '';
+      }
+      document.getElementById('labelWeightTotal').value = '';
+      document.getElementById('labelStatus').textContent = '';
+      document.getElementById('labelSaveBtn').disabled = false;
+      document.getElementById('labelSaveBtn').textContent = '💾 บันทึก Label';
+      document.getElementById('labelModal').classList.add('open');
+    }
+
+    async function saveLabel() {
+      const id = document.getElementById('labelId').value;
+      const sieves = ['1"','3/4"','1/2"','3/8"','#4','#8','Pan'];
+      const data = { sieves: [], weight_total_g: parseFloat(document.getElementById('labelWeightTotal').value) || null };
+      for (let i = 0; i <= 6; i++) {
+        const w = parseFloat(document.getElementById('lw' + i).value);
+        const p = parseFloat(document.getElementById('lp' + i).value);
+        data.sieves.push({
+          sieve: sieves[i],
+          weight_g: isNaN(w) ? null : w,
+          passing: isNaN(p) ? null : p
+        });
+      }
+      const btn = document.getElementById('labelSaveBtn');
+      btn.disabled = true; btn.textContent = '⏳ กำลังบันทึก...';
+      const res = await fetch('/history/' + id + '/label', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      btn.disabled = false; btn.textContent = '💾 บันทึก Label';
+      if (res.ok) {
+        document.getElementById('labelStatus').textContent = '✅ บันทึก Label สำเร็จ';
+        setTimeout(() => closeModal('labelModal'), 1200);
+      } else {
+        document.getElementById('labelStatus').textContent = '❌ บันทึกไม่สำเร็จ';
+      }
+    }
   </script>
 </body>
 </html>"""
@@ -1397,9 +1536,11 @@ def history_pdf(aid):
     source      = row['source'] or ''
     tested_date = str(row['tested_date']) if row.get('tested_date') else row['analyzed_at'].strftime('%Y-%m-%d')
     tested_time = row.get('tested_time') or to_12h(row['analyzed_at'].strftime('%H:%M'))
-    doc_no    = row.get('doc_no') or ''
-    chart_buf = generate_chart(pred_6, source, agg_type=agg_type)
-    pdf_buf   = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, doc_no=doc_no)
+    doc_no     = row.get('doc_no') or ''
+    image_path = get_image_path(session['company_id'], doc_no) if doc_no else None
+    chart_buf  = generate_chart(pred_6, source, agg_type=agg_type)
+    pdf_buf    = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf,
+                              doc_no=doc_no, image_path=image_path)
     fname = f"AggNet_Report_{tested_date}_{aid}.pdf"
     pdf_bytes = pdf_buf.read()
     response = make_response(pdf_bytes)
@@ -1472,6 +1613,20 @@ def history_delete(aid):
     ok = aggnet_db.delete_analysis(aid, session['company_id'])
     return ('', 200) if ok else ('Not found', 404)
 
+@app.route('/history/<int:aid>/label', methods=['POST'])
+def history_label(aid):
+    """บันทึก Lab Label (ค่า sieve จริงจาก lab) เพื่อใช้เป็น training data"""
+    if not session.get('company_id'):
+        return jsonify({'error': 'unauthorized'}), 401
+    if not DB_ENABLED:
+        return jsonify({'error': 'db disabled'}), 503
+    import json as _json
+    label_data = request.get_json(force=True, silent=True)
+    if not label_data:
+        return jsonify({'error': 'invalid json'}), 400
+    ok = aggnet_db.save_label(aid, session['company_id'], label_data)
+    return ('', 200) if ok else ('Not found', 404)
+
 @app.route('/export')
 def export_csv():
     if not session.get('company_id'):
@@ -1490,15 +1645,22 @@ def export_csv():
 
     buf = _io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(['Date', 'Time', 'AggType', 'Source', 'FM',
+    writer.writerow(['DocNo', 'Date', 'Time', 'AggType', 'Source', 'FM',
                      '3/4_%pass', '1/2_%pass', '3/8_%pass', '#4_%pass', '#8_%pass', 'Pan_%pass'])
     for r in rows:
         sieves = r['sieve_json'] if isinstance(r['sieve_json'], list) else _json.loads(r['sieve_json'] or '[]')
         passing = [s['passing'] for s in sieves] if sieves else [''] * 7
-        # passing[0]=1", [1]=3/4", [2]=1/2", [3]=3/8", [4]=#4, [5]=#8, [6]=Pan
+        # ใช้ tested_date/tested_time ถ้ามี ไม่งั้น fallback analyzed_at
+        if r.get('tested_date'):
+            row_date = str(r['tested_date'])
+            row_time = r.get('tested_time') or ''
+        else:
+            row_date = r['analyzed_at'].strftime('%Y-%m-%d')
+            row_time = to_12h(r['analyzed_at'].strftime('%H:%M'))
         writer.writerow([
-            r['analyzed_at'].strftime('%Y-%m-%d'),
-            to_12h(r['analyzed_at'].strftime('%H:%M')),
+            r.get('doc_no') or '',
+            row_date,
+            row_time,
             '3/4"' if '3_4' in (r['agg_type'] or '') else '3/8"',
             r['source'],
             f"{r['fm']:.2f}" if r['fm'] else '',

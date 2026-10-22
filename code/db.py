@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS analyses (
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS doc_no VARCHAR(50);
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS tested_date DATE;
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS tested_time VARCHAR(20);
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS label_json JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_analyses_company ON analyses(company_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_date    ON analyses(analyzed_at DESC);
@@ -230,6 +231,18 @@ def update_analysis(analysis_id: int, company_id: int, agg_type: str, source: st
                 image_filename, tested_date, tested_time,
                 analysis_id, company_id
             ))
+            updated = cur.rowcount
+        conn.commit()
+    return updated > 0
+
+def save_label(analysis_id: int, company_id: int, label_data: dict) -> bool:
+    """บันทึกค่า sieve จริงจาก lab (label สำหรับ training) คืน True ถ้าสำเร็จ"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE analyses SET label_json=%s WHERE id=%s AND company_id=%s",
+                (json.dumps(label_data), analysis_id, company_id)
+            )
             updated = cur.rowcount
         conn.commit()
     return updated > 0
