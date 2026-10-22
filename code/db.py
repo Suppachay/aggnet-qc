@@ -180,6 +180,26 @@ def update_analysis_source(analysis_id: int, company_id: int, source: str) -> bo
         conn.commit()
     return updated > 0
 
+def update_analysis(analysis_id: int, company_id: int, agg_type: str, source: str,
+                    fm: float, sieve_data: list, zones_data: list,
+                    image_filename: str = None) -> bool:
+    """อัพเดตผลวิเคราะห์ทั้งหมด (re-analyze) คืน True ถ้าสำเร็จ"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE analyses
+                SET agg_type=%s, source=%s, fm=%s, sieve_json=%s, zones_json=%s,
+                    image_filename=%s, analyzed_at=NOW()
+                WHERE id=%s AND company_id=%s
+            """, (
+                agg_type, source, fm,
+                json.dumps(sieve_data), json.dumps(zones_data),
+                image_filename, analysis_id, company_id
+            ))
+            updated = cur.rowcount
+        conn.commit()
+    return updated > 0
+
 def get_fm_trend(company_id: int, agg_type: str, days: int = 30):
     """FM trend สำหรับ dashboard chart"""
     with get_conn() as conn:

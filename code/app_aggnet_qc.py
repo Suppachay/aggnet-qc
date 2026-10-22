@@ -1093,7 +1093,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
           <div class="action-btns" onclick="event.stopPropagation()">
             <button class="btn-view" onclick="viewDetail({{ r.id }})">🔍 ดูผล</button>
             <button class="btn-pdf"  onclick="downloadPdf({{ r.id }})">📄 PDF</button>
-            <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}')">✏️ แก้ไข</button>
+            <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}', '{{ r.agg_type }}')">✏️ แก้ไข</button>
             <button class="btn-del"  onclick="deleteRow({{ r.id }}, this)">🗑️ ลบ</button>
           </div>
         </td>
@@ -1121,17 +1121,26 @@ HISTORY_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Edit Modal -->
+  <!-- Edit / Re-analyze Modal -->
   <div class="modal-overlay" id="editModal">
-    <div class="modal" style="max-width:420px">
+    <div class="modal" style="max-width:460px">
       <button class="modal-close" onclick="closeModal('editModal')">✕</button>
-      <h2>✏️ แก้ไขแหล่งหิน</h2>
+      <h2>✏️ วิเคราะห์ใหม่</h2>
       <input type="hidden" id="editId">
-      <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:6px">แหล่งหิน (Source)</label>
-      <input class="edit-input" type="text" id="editSource">
+      <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px">แหล่งหิน (Source)</label>
+      <input class="edit-input" type="text" id="editSource" style="margin-bottom:14px">
+      <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px">ประเภทหิน</label>
+      <select id="editAggType" style="width:100%;padding:10px;border:1.5px solid #e2e8f0;border-radius:8px;font-family:inherit;font-size:1rem;margin-bottom:14px">
+        <option value="Aggregate 3_4inch">หิน 3/4"</option>
+        <option value="Aggregate 3_8inch">หิน 3/8"</option>
+      </select>
+      <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px">อัพโหลดภาพหินใหม่</label>
+      <input type="file" id="editImage" accept="image/*"
+             style="width:100%;padding:8px;border:1.5px solid #e2e8f0;border-radius:8px;font-family:inherit;margin-bottom:4px">
+      <div id="editStatus" style="font-size:.85rem;color:#718096;min-height:20px;margin-bottom:8px"></div>
       <div class="modal-footer">
         <button class="btn-cancel" onclick="closeModal('editModal')">ยกเลิก</button>
-        <button class="btn-save" onclick="saveEdit()">บันทึก</button>
+        <button class="btn-save" id="editSaveBtn" onclick="saveReanalyze()">🔄 วิเคราะห์ใหม่</button>
       </div>
     </div>
   </div>
@@ -1165,27 +1174,36 @@ HISTORY_PAGE = """<!DOCTYPE html>
       window.open('/history/' + id + '/pdf', '_blank');
     }
 
-    function openEdit(id, source) {
+    function openEdit(id, source, aggType) {
       document.getElementById('editId').value = id;
       document.getElementById('editSource').value = source;
+      document.getElementById('editAggType').value = aggType || 'Aggregate 3_4inch';
+      document.getElementById('editImage').value = '';
+      document.getElementById('editStatus').textContent = '';
       document.getElementById('editModal').classList.add('open');
     }
 
-    async function saveEdit() {
-      const id  = document.getElementById('editId').value;
-      const src = document.getElementById('editSource').value.trim();
-      const res = await fetch('/history/' + id + '/edit', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({source: src})
-      });
+    async function saveReanalyze() {
+      const id      = document.getElementById('editId').value;
+      const src     = document.getElementById('editSource').value.trim();
+      const aggType = document.getElementById('editAggType').value;
+      const imgFile = document.getElementById('editImage').files[0];
+      if (!imgFile) { alert('กรุณาเลือกภาพหินก่อน'); return; }
+      const btn = document.getElementById('editSaveBtn');
+      btn.disabled = true; btn.textContent = '⏳ กำลังวิเคราะห์...';
+      document.getElementById('editStatus').textContent = 'กำลังส่งภาพและวิเคราะห์...';
+      const fd = new FormData();
+      fd.append('image', imgFile);
+      fd.append('source', src);
+      fd.append('agg_type', aggType);
+      const res = await fetch('/history/' + id + '/reanalyze', { method: 'POST', body: fd });
+      btn.disabled = false; btn.textContent = '🔄 วิเคราะห์ใหม่';
       if (res.ok) {
-        // อัพเดต cell โดยไม่ reload
-        document.querySelectorAll('.source-cell').forEach(td => {
-          if (td.dataset.id == id) td.textContent = src;
-        });
-        closeModal('editModal');
-      } else { alert('บันทึกไม่สำเร็จ'); }
+        document.getElementById('editStatus').textContent = '✅ อัพเดตสำเร็จ';
+        setTimeout(() => { closeModal('editModal'); location.reload(); }, 800);
+      } else {
+        document.getElementById('editStatus').textContent = '❌ เกิดข้อผิดพลาด';
+      }
     }
 
     async function deleteRow(id, btn) {
@@ -1307,6 +1325,48 @@ def history_edit(aid):
     source = (data.get('source') or '').strip()
     ok = aggnet_db.update_analysis_source(aid, session['company_id'], source)
     return ('', 200) if ok else ('Not found', 404)
+
+@app.route('/history/<int:aid>/reanalyze', methods=['POST'])
+def history_reanalyze(aid):
+    if not session.get('company_id'):
+        return jsonify({'error': 'unauthorized'}), 401
+    if not DB_ENABLED:
+        return jsonify({'error': 'db disabled'}), 503
+    try:
+        file     = request.files['image']
+        source   = request.form.get('source', '')
+        agg_type = request.form.get('agg_type', 'Aggregate 3_4inch')
+        img  = Image.open(file.stream).convert('RGB')
+        pred = predict_from_image(img, agg_type=agg_type)
+        passing, ind_ret, cu_ret = compute_sieve_table(pred)
+        sieve_labels = ['1"', '3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan']
+        sieve_table = []
+        for i in range(7):
+            sieve_table.append({
+                'sieve':   sieve_labels[i],
+                'passing': float(passing[i]),
+                'ind_ret': float(ind_ret[i]),
+                'cu_ret':  float(cu_ret[i]),
+            })
+        zones_raw = compute_production_ratio(ind_ret)
+        zones_out = []
+        for zn in ['3/4"', '1/2"', '3/8"']:
+            val = zones_raw[zn]
+            status, _ = get_zone_status(val, zn)
+            lim = ZONE_LIMITS[zn]
+            zones_out.append({'name': zn, 'value': float(val), 'status': status,
+                               'astm_min': lim['astm'][0], 'astm_max': lim['astm'][1],
+                               'ctrl_min': lim['ctrl'][0], 'ctrl_max': lim['ctrl'][1], 'avg': lim['avg']})
+        fm = compute_fm(cu_ret)
+        ok = aggnet_db.update_analysis(
+            analysis_id=aid, company_id=session['company_id'],
+            agg_type=agg_type, source=source,
+            fm=round(float(fm), 2), sieve_data=sieve_table, zones_data=zones_out,
+            image_filename=file.filename,
+        )
+        return ('', 200) if ok else ('Not found', 404)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/history/<int:aid>/delete', methods=['POST'])
 def history_delete(aid):
