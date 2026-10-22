@@ -153,11 +153,11 @@ def get_analyses(company_id: int, limit: int = 100,
         conditions.append("agg_type = %s")
         params.append(agg_type)
     if date_from:
-        conditions.append("analyzed_at >= %s")
+        conditions.append("COALESCE(tested_date, analyzed_at::date) >= %s")
         params.append(date_from)
     if date_to:
-        conditions.append("analyzed_at <= %s")
-        params.append(date_to + " 23:59:59")
+        conditions.append("COALESCE(tested_date, analyzed_at::date) <= %s")
+        params.append(date_to)
 
     where = " AND ".join(conditions)
     params.append(limit)
