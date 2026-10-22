@@ -177,13 +177,21 @@ def compute_production_ratio(ind_retain):
 
     return {'3/4"': zone_3_4, '1/2"': zone_1_2, '3/8"': zone_3_8}
 
-def compute_fm(cu_ret_full):
-    """คำนวณ Fineness Modulus (FM) จาก % Cumulative Retain บนตะแกรง 3/4"–Pan
-    FM = (cu_ret[3/4"] + cu_ret[1/2"] + cu_ret[3/8"] + cu_ret[#4] + cu_ret[#8] + cu_ret[Pan]) / 100
-    Pan ใช้แทน #16 สำหรับหิน 3/8" (สำหรับหินสะอาด #16 ind.ret ≈ 0 ∴ #16 cu.ret ≈ Pan cu.ret)
+def compute_fm(cu_ret_full, agg_type='Aggregate 3_4inch'):
+    """คำนวณ Fineness Modulus (FM) จาก % Cumulative Retain
     cu_ret_full: array 7 ค่า [1", 3/4", 1/2", 3/8", #4, #8, Pan]
+
+    หิน 3/4" (coarse):
+      FM = (3/4" + 1/2" + 3/8" + #4 + #8) / 100  — ไม่รวม Pan
+    หิน 3/8" (fine):
+      FM = (3/8" + #4 + #8 + Pan) / 100  — Pan แทน #16
     """
-    return sum(cu_ret_full[1:7]) / 100.0  # index 1–6 = 3/4", 1/2", 3/8", #4, #8, Pan
+    if '3_8' in agg_type:
+        # index: 3/8"=3, #4=4, #8=5, Pan=6
+        return sum([cu_ret_full[3], cu_ret_full[4], cu_ret_full[5], cu_ret_full[6]]) / 100.0
+    else:
+        # index: 3/4"=1, 1/2"=2, 3/8"=3, #4=4, #8=5  (ไม่รวม Pan=6)
+        return sum(cu_ret_full[1:6]) / 100.0
 
 def get_zone_status(val, zone_name):
     lim = ZONE_LIMITS[zone_name]
@@ -396,7 +404,7 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, 
     story.append(Spacer(1, 3*mm))
 
     # ── FM ──
-    fm_val = compute_fm(cu_ret_full)
+    fm_val = compute_fm(cu_ret_full, agg_type=agg_type)
     fm_data = [[
         cell('Fineness Modulus (FM)', bold=True, align=TA_LEFT),
         cell(f'{fm_val:.2f}', bold=True),
@@ -879,7 +887,7 @@ def analyze():
             })
 
         # FM
-        fm = compute_fm(cu_ret)
+        fm = compute_fm(cu_ret, agg_type=agg_type)
 
         # Chart
         chart_buf = generate_chart(pred, source, agg_type=agg_type)
@@ -1411,7 +1419,7 @@ def history_reanalyze(aid):
             zones_out.append({'name': zn, 'value': float(val), 'status': status,
                                'astm_min': lim['astm'][0], 'astm_max': lim['astm'][1],
                                'ctrl_min': lim['ctrl'][0], 'ctrl_max': lim['ctrl'][1], 'avg': lim['avg']})
-        fm = compute_fm(cu_ret)
+        fm = compute_fm(cu_ret, agg_type=agg_type)
         ok = aggnet_db.update_analysis(
             analysis_id=aid, company_id=session['company_id'],
             agg_type=agg_type, source=source,
