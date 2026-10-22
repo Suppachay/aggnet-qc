@@ -627,7 +627,7 @@ HTML_PAGE = """
   <div class="card">
     <h2>📋 ข้อมูลตัวอย่าง</h2>
     <label>แหล่งหิน (Source)</label>
-    <input type="text" id="source" placeholder="เช่น ART CONCRETE COMPANY LIMITED">
+    <input type="text" id="source" placeholder="เช่น บริษัท ศิลาสานนท์ จำกัด">
     <label>ประเภทมวลรวม</label>
     <select id="agg_type">
       <option value="Aggregate 3_4inch">Aggregate 3/4" (หิน 3/4 นิ้ว)</option>
