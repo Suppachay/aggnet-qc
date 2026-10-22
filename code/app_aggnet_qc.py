@@ -1121,7 +1121,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
           <div class="action-btns" onclick="event.stopPropagation()">
             <button class="btn-view" onclick="viewDetail({{ r.id }})">🔍 ดูผล</button>
             <button class="btn-pdf"  onclick="downloadPdf({{ r.id }})">📄 PDF</button>
-            <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}', '{{ r.agg_type }}')">✏️ แก้ไข</button>
+            <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}', '{{ r.agg_type }}', '{% if r.tested_date %}{{ r.tested_date.strftime("%Y-%m-%d") }}{% endif %}', '{{ r.tested_time or "" }}')">✏️ แก้ไข</button>
             <button class="btn-del"  onclick="deleteRow({{ r.id }}, this)">🗑️ ลบ</button>
           </div>
         </td>
@@ -1162,6 +1162,16 @@ HISTORY_PAGE = """<!DOCTYPE html>
         <option value="Aggregate 3_4inch">หิน 3/4"</option>
         <option value="Aggregate 3_8inch">หิน 3/8"</option>
       </select>
+      <div style="display:flex;gap:10px;margin-bottom:14px">
+        <div style="flex:1">
+          <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px">วันที่ทดสอบ</label>
+          <input type="date" id="editDate" style="width:100%;padding:10px;border:1.5px solid #e2e8f0;border-radius:8px;font-family:inherit;font-size:1rem">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px">เวลาทดสอบ</label>
+          <input type="time" id="editTime" style="width:100%;padding:10px;border:1.5px solid #e2e8f0;border-radius:8px;font-family:inherit;font-size:1rem">
+        </div>
+      </div>
       <label style="font-size:.85rem;color:#4a5568;font-weight:600;display:block;margin-bottom:4px">อัพโหลดภาพหินใหม่</label>
       <input type="file" id="editImage" accept="image/*"
              style="width:100%;padding:8px;border:1.5px solid #e2e8f0;border-radius:8px;font-family:inherit;margin-bottom:4px">
@@ -1230,12 +1240,30 @@ HISTORY_PAGE = """<!DOCTYPE html>
       window.open('/history/' + id + '/pdf', '_blank');
     }
 
-    function openEdit(id, source, aggType) {
+    function openEdit(id, source, aggType, testedDate, testedTime) {
       document.getElementById('editId').value = id;
       document.getElementById('editSource').value = source;
       document.getElementById('editAggType').value = aggType || 'Aggregate 3_4inch';
       document.getElementById('editImage').value = '';
       document.getElementById('editStatus').textContent = '';
+      // วันที่/เวลา — ถ้าไม่มีให้ใช้วันปัจจุบัน
+      const today = new Date();
+      document.getElementById('editDate').value = testedDate ||
+        today.toISOString().slice(0,10);
+      // แปลง "1:10 PM" → "13:10" สำหรับ input[type=time]
+      if (testedTime) {
+        const m = testedTime.match(/(\d+):(\d+)\s*(AM|PM)/i);
+        if (m) {
+          let h = parseInt(m[1]);
+          const min = m[2];
+          if (m[3].toUpperCase() === 'PM' && h !== 12) h += 12;
+          if (m[3].toUpperCase() === 'AM' && h === 12) h = 0;
+          document.getElementById('editTime').value = String(h).padStart(2,'0') + ':' + min;
+        } else { document.getElementById('editTime').value = testedTime.slice(0,5); }
+      } else {
+        document.getElementById('editTime').value =
+          String(today.getHours()).padStart(2,'0') + ':' + String(today.getMinutes()).padStart(2,'0');
+      }
       document.getElementById('editModal').classList.add('open');
     }
 
@@ -1252,6 +1280,8 @@ HISTORY_PAGE = """<!DOCTYPE html>
       fd.append('image', imgFile);
       fd.append('source', src);
       fd.append('agg_type', aggType);
+      fd.append('tested_date', document.getElementById('editDate').value);
+      fd.append('tested_time', document.getElementById('editTime').value);
       const res = await fetch('/history/' + id + '/reanalyze', { method: 'POST', body: fd });
       btn.disabled = false; btn.textContent = '🔄 วิเคราะห์ใหม่';
       if (res.ok) {
@@ -1395,9 +1425,11 @@ def history_reanalyze(aid):
     if not DB_ENABLED:
         return jsonify({'error': 'db disabled'}), 503
     try:
-        file     = request.files['image']
-        source   = request.form.get('source', '')
-        agg_type = request.form.get('agg_type', 'Aggregate 3_4inch')
+        file        = request.files['image']
+        source      = request.form.get('source', '')
+        agg_type    = request.form.get('agg_type', 'Aggregate 3_4inch')
+        tested_date = request.form.get('tested_date') or None
+        tested_time = to_12h(request.form.get('tested_time', '')) if request.form.get('tested_time') else None
         img  = Image.open(file.stream).convert('RGB')
         pred = predict_from_image(img, agg_type=agg_type)
         passing, ind_ret, cu_ret = compute_sieve_table(pred)
@@ -1425,6 +1457,7 @@ def history_reanalyze(aid):
             agg_type=agg_type, source=source,
             fm=round(float(fm), 2), sieve_data=sieve_table, zones_data=zones_out,
             image_filename=file.filename,
+            tested_date=tested_date, tested_time=tested_time,
         )
         return ('', 200) if ok else ('Not found', 404)
     except Exception as e:
