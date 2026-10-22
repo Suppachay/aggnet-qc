@@ -1082,11 +1082,16 @@ HISTORY_PAGE = """<!DOCTYPE html>
   </form>
 
   {% if rows %}
-  <table>
+  <table id="historyTable">
     <thead>
       <tr>
-        <th>#</th><th>เลขที่</th><th>วันที่-เวลา</th><th>ประเภทหิน</th><th>แหล่ง</th>
-        <th>FM</th><th>การจัดการ</th>
+        <th onclick="sortTable(0)" style="cursor:pointer" title="เรียง"># <span class="sort-icon">⇅</span></th>
+        <th onclick="sortTable(1)" style="cursor:pointer" title="เรียง">เลขที่ <span class="sort-icon">⇅</span></th>
+        <th onclick="sortTable(2)" style="cursor:pointer" title="เรียง">วันที่-เวลา <span class="sort-icon">⇅</span></th>
+        <th onclick="sortTable(3)" style="cursor:pointer" title="เรียง">ประเภทหิน <span class="sort-icon">⇅</span></th>
+        <th onclick="sortTable(4)" style="cursor:pointer" title="เรียง">แหล่ง <span class="sort-icon">⇅</span></th>
+        <th onclick="sortTable(5)" style="cursor:pointer" title="เรียง">FM <span class="sort-icon">⇅</span></th>
+        <th>การจัดการ</th>
       </tr>
     </thead>
     <tbody>
@@ -1158,7 +1163,34 @@ HISTORY_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <style>
+    #historyTable th[onclick]:hover { background:#1a365d; }
+    #historyTable th .sort-icon { opacity:0.5; font-size:.8em; }
+    #historyTable th.asc .sort-icon::after  { content:'▲'; }
+    #historyTable th.desc .sort-icon::after { content:'▼'; }
+    #historyTable th.asc  .sort-icon, #historyTable th.desc .sort-icon { opacity:1; }
+  </style>
   <script>
+    let _sortCol = -1, _sortAsc = true;
+    function sortTable(col) {
+      const tbl = document.getElementById('historyTable');
+      const tbody = tbl.querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const ths = tbl.querySelectorAll('thead th');
+      if (_sortCol === col) { _sortAsc = !_sortAsc; }
+      else { _sortCol = col; _sortAsc = true; }
+      ths.forEach((th, i) => { th.classList.remove('asc','desc'); });
+      ths[col].classList.add(_sortAsc ? 'asc' : 'desc');
+      rows.sort((a, b) => {
+        const ta = a.cells[col]?.innerText.trim() || '';
+        const tb = b.cells[col]?.innerText.trim() || '';
+        const na = parseFloat(ta), nb = parseFloat(tb);
+        const cmp = (!isNaN(na) && !isNaN(nb)) ? na - nb : ta.localeCompare(tb, 'th');
+        return _sortAsc ? cmp : -cmp;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    }
+
     function closeModal(id) {
       document.getElementById(id).classList.remove('open');
     }
