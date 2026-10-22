@@ -1083,7 +1083,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
     <thead>
       <tr>
         <th>#</th><th>วันที่-เวลา</th><th>ประเภทหิน</th><th>แหล่ง</th>
-        <th>FM</th><th>#4 (%ผ่าน)</th><th>#8 (%ผ่าน)</th><th>การจัดการ</th>
+        <th>FM</th><th>การจัดการ</th>
       </tr>
     </thead>
     <tbody>
@@ -1098,8 +1098,6 @@ HISTORY_PAGE = """<!DOCTYPE html>
         </td>
         <td class="source-cell" data-id="{{ r.id }}">{{ r.source }}</td>
         <td><b>{{ '%.2f'|format(r.fm) }}</b></td>
-        <td>{{ '%.1f'|format(r.sieve_json[4]['passing']) if r.sieve_json else '-' }}</td>
-        <td>{{ '%.1f'|format(r.sieve_json[5]['passing']) if r.sieve_json else '-' }}</td>
         <td>
           <div class="action-btns" onclick="event.stopPropagation()">
             <button class="btn-view" onclick="viewDetail({{ r.id }})">🔍 ดูผล</button>
