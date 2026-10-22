@@ -46,10 +46,14 @@ CREATE TABLE IF NOT EXISTS analyses (
     sieve_json     JSONB,
     zones_json     JSONB,
     image_filename VARCHAR(500),
-    doc_no         VARCHAR(50)
+    doc_no         VARCHAR(50),
+    tested_date    DATE,
+    tested_time    VARCHAR(20)
 );
 
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS doc_no VARCHAR(50);
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS tested_date DATE;
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS tested_time VARCHAR(20);
 
 CREATE INDEX IF NOT EXISTS idx_analyses_company ON analyses(company_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_date    ON analyses(analyzed_at DESC);
@@ -117,21 +121,23 @@ def list_companies():
 # ── Analyses ─────────────────────────────────────────────────────────────────
 def save_analysis(company_id: int, agg_type: str, source: str,
                   fm: float, sieve_data: list, zones_data: list,
-                  image_filename: str = None) -> tuple:
+                  image_filename: str = None,
+                  tested_date: str = None, tested_time: str = None) -> tuple:
     """บันทึกผลวิเคราะห์ คืน (id, doc_no)"""
     doc_no = generate_doc_no(company_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO analyses
-                    (company_id, agg_type, source, fm, sieve_json, zones_json, image_filename, doc_no)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (company_id, agg_type, source, fm, sieve_json, zones_json,
+                     image_filename, doc_no, tested_date, tested_time)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 company_id, agg_type, source, fm,
                 json.dumps(sieve_data),
                 json.dumps(zones_data),
-                image_filename, doc_no
+                image_filename, doc_no, tested_date, tested_time
             ))
             row = cur.fetchone()
         conn.commit()
@@ -159,7 +165,8 @@ def get_analyses(company_id: int, limit: int = 100,
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
-                SELECT id, analyzed_at, agg_type, source, fm, sieve_json, zones_json, image_filename, doc_no
+                SELECT id, analyzed_at, agg_type, source, fm, sieve_json, zones_json,
+                       image_filename, doc_no, tested_date, tested_time
                 FROM analyses
                 WHERE {where}
                 ORDER BY analyzed_at DESC
@@ -203,19 +210,22 @@ def update_analysis_source(analysis_id: int, company_id: int, source: str) -> bo
 
 def update_analysis(analysis_id: int, company_id: int, agg_type: str, source: str,
                     fm: float, sieve_data: list, zones_data: list,
-                    image_filename: str = None) -> bool:
+                    image_filename: str = None,
+                    tested_date: str = None, tested_time: str = None) -> bool:
     """อัพเดตผลวิเคราะห์ทั้งหมด (re-analyze) คืน True ถ้าสำเร็จ (doc_no คงเดิม)"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE analyses
                 SET agg_type=%s, source=%s, fm=%s, sieve_json=%s, zones_json=%s,
-                    image_filename=%s, analyzed_at=NOW()
+                    image_filename=%s, analyzed_at=NOW(),
+                    tested_date=%s, tested_time=%s
                 WHERE id=%s AND company_id=%s
             """, (
                 agg_type, source, fm,
                 json.dumps(sieve_data), json.dumps(zones_data),
-                image_filename, analysis_id, company_id
+                image_filename, tested_date, tested_time,
+                analysis_id, company_id
             ))
             updated = cur.rowcount
         conn.commit()

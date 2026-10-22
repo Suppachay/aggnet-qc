@@ -898,6 +898,8 @@ def analyze():
                     sieve_data     = sieve_table,
                     zones_data     = zones_out,
                     image_filename = file.filename,
+                    tested_date    = tested_date,
+                    tested_time    = to_12h(tested_time),
                 )
             except Exception as _db_save_err:
                 print(f"DB save error: {_db_save_err}")  # ไม่ crash app
@@ -1099,7 +1101,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
       <tr>
         <td>{{ loop.index }}</td>
         <td><b>{{ r.doc_no or '-' }}</b></td>
-        <td>{{ r.analyzed_at.strftime('%d/%m/%Y %H:%M') }}</td>
+        <td>{% if r.tested_date %}{{ r.tested_date.strftime('%d/%m/%Y') }} {{ r.tested_time or '' }}{% else %}{{ r.analyzed_at.strftime('%d/%m/%Y %H:%M') }}{% endif %}</td>
         <td>
           <span class="badge {{ 'b34' if '3_4' in r.agg_type else 'b38' }}">
             {{ '3/4"' if '3_4' in r.agg_type else '3/8"' }}
@@ -1324,10 +1326,14 @@ def history_detail(aid):
     sieve = row['sieve_json']
     if isinstance(sieve, str):
         sieve = _json.loads(sieve)
+    if row.get('tested_date'):
+        display_dt = str(row['tested_date']) + ' ' + (row.get('tested_time') or '')
+    else:
+        display_dt = row['analyzed_at'].strftime('%d/%m/%Y %H:%M')
     return jsonify({
         'id':          row['id'],
         'doc_no':      row.get('doc_no') or '',
-        'analyzed_at': row['analyzed_at'].strftime('%d/%m/%Y %H:%M'),
+        'analyzed_at': display_dt,
         'agg_type':    row['agg_type'],
         'source':      row['source'],
         'fm':          row['fm'],
@@ -1351,8 +1357,8 @@ def history_pdf(aid):
     pred_6 = np.array([s['passing'] for s in sieve[1:]])
     agg_type    = row['agg_type']
     source      = row['source'] or ''
-    tested_date = row['analyzed_at'].strftime('%Y-%m-%d')
-    tested_time = to_12h(row['analyzed_at'].strftime('%H:%M'))
+    tested_date = str(row['tested_date']) if row.get('tested_date') else row['analyzed_at'].strftime('%Y-%m-%d')
+    tested_time = row.get('tested_time') or to_12h(row['analyzed_at'].strftime('%H:%M'))
     doc_no    = row.get('doc_no') or ''
     chart_buf = generate_chart(pred_6, source, agg_type=agg_type)
     pdf_buf   = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, doc_no=doc_no)
