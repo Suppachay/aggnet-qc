@@ -266,7 +266,7 @@ def to_12h(time_str):
     except Exception:
         return time_str
 
-def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
+def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, doc_no=None):
     """สร้าง PDF Report ตาม format SIEVE ANALYSIS AGGREGATE"""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -285,10 +285,11 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf):
     style_small  = ParagraphStyle('sm',     fontSize=8,  fontName=_THAI_FONT)
 
     # ── Header ──
+    doc_no_str = f'เลขที่: {doc_no}' if doc_no else ''
     header_data = [
         [Paragraph('Value Based<br/>Technical Service', style_small),
          Paragraph('<b>SIEVE ANALYSIS RESULT</b>', style_title),
-         Paragraph('', style_small)],
+         Paragraph(f'<b>{doc_no_str}</b>', style_small)],
     ]
     header_tbl = Table(header_data, colWidths=[45*mm, 100*mm, 45*mm])
     header_tbl.setStyle(TableStyle([
@@ -886,9 +887,10 @@ def analyze():
         chart_b64 = base64.b64encode(chart_buf.read()).decode()
 
         # บันทึกลง DB (ถ้า login อยู่)
+        _doc_no = None
         if DB_ENABLED and session.get('company_id'):
             try:
-                aggnet_db.save_analysis(
+                _, _doc_no = aggnet_db.save_analysis(
                     company_id     = session['company_id'],
                     agg_type       = agg_type,
                     source         = source,
@@ -906,6 +908,7 @@ def analyze():
             'chart_b64':   chart_b64,
             'fm':          round(float(fm), 2),
             'agg_type':    agg_type,
+            'doc_no':      _doc_no,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1082,7 +1085,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
   <table>
     <thead>
       <tr>
-        <th>#</th><th>วันที่-เวลา</th><th>ประเภทหิน</th><th>แหล่ง</th>
+        <th>#</th><th>เลขที่</th><th>วันที่-เวลา</th><th>ประเภทหิน</th><th>แหล่ง</th>
         <th>FM</th><th>การจัดการ</th>
       </tr>
     </thead>
@@ -1090,6 +1093,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
       {% for r in rows %}
       <tr>
         <td>{{ loop.index }}</td>
+        <td><b>{{ r.doc_no or '-' }}</b></td>
         <td>{{ r.analyzed_at.strftime('%d/%m/%Y %H:%M') }}</td>
         <td>
           <span class="badge {{ 'b34' if '3_4' in r.agg_type else 'b38' }}">
@@ -1166,6 +1170,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
       document.getElementById('modalTitle').textContent =
         'ผลการวิเคราะห์ — ' + (d.agg_type.includes('3_4') ? 'หิน 3/4"' : 'หิน 3/8"');
       document.getElementById('modalMeta').innerHTML =
+        (d.doc_no ? '<div><span>เลขที่เอกสาร</span><b>' + d.doc_no + '</b></div>' : '') +
         '<div><span>วันที่-เวลา</span>' + d.analyzed_at + '</div>' +
         '<div><span>แหล่งหิน</span>' + (d.source || '-') + '</div>';
       document.getElementById('modalFM').textContent = 'Fineness Modulus (FM): ' + d.fm.toFixed(2);
@@ -1289,6 +1294,7 @@ def history_detail(aid):
         sieve = _json.loads(sieve)
     return jsonify({
         'id':          row['id'],
+        'doc_no':      row.get('doc_no') or '',
         'analyzed_at': row['analyzed_at'].strftime('%d/%m/%Y %H:%M'),
         'agg_type':    row['agg_type'],
         'source':      row['source'],
@@ -1315,8 +1321,9 @@ def history_pdf(aid):
     source      = row['source'] or ''
     tested_date = row['analyzed_at'].strftime('%Y-%m-%d')
     tested_time = to_12h(row['analyzed_at'].strftime('%H:%M'))
+    doc_no    = row.get('doc_no') or ''
     chart_buf = generate_chart(pred_6, source, agg_type=agg_type)
-    pdf_buf   = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf)
+    pdf_buf   = generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, doc_no=doc_no)
     fname = f"AggNet_Report_{tested_date}_{aid}.pdf"
     pdf_bytes = pdf_buf.read()
     response = make_response(pdf_bytes)

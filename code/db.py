@@ -45,8 +45,11 @@ CREATE TABLE IF NOT EXISTS analyses (
     fm             FLOAT,
     sieve_json     JSONB,
     zones_json     JSONB,
-    image_filename VARCHAR(500)
+    image_filename VARCHAR(500),
+    doc_no         VARCHAR(50)
 );
+
+ALTER TABLE analyses ADD COLUMN IF NOT EXISTS doc_no VARCHAR(50);
 
 CREATE INDEX IF NOT EXISTS idx_analyses_company ON analyses(company_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_date    ON analyses(analyzed_at DESC);
@@ -61,6 +64,19 @@ def init_db():
     print("DB: tables ready")
 
 # ── Companies ────────────────────────────────────────────────────────────────
+def generate_doc_no(company_id: int) -> str:
+    """สร้างเลขที่เอกสาร {YEAR}-{SEQ:04d} เช่น 2026-0001"""
+    import datetime as _dt
+    year = _dt.datetime.now().year
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM analyses WHERE company_id=%s AND EXTRACT(YEAR FROM analyzed_at)=%s",
+                (company_id, year)
+            )
+            count = cur.fetchone()[0]
+    return f"{year}-{count+1:04d}"
+
 def create_company(name: str, username: str, password: str) -> int:
     """สร้างบัญชีบริษัทใหม่ คืน id"""
     pw_hash = generate_password_hash(password)
@@ -101,24 +117,25 @@ def list_companies():
 # ── Analyses ─────────────────────────────────────────────────────────────────
 def save_analysis(company_id: int, agg_type: str, source: str,
                   fm: float, sieve_data: list, zones_data: list,
-                  image_filename: str = None) -> int:
-    """บันทึกผลวิเคราะห์ คืน id"""
+                  image_filename: str = None) -> tuple:
+    """บันทึกผลวิเคราะห์ คืน (id, doc_no)"""
+    doc_no = generate_doc_no(company_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO analyses
-                    (company_id, agg_type, source, fm, sieve_json, zones_json, image_filename)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (company_id, agg_type, source, fm, sieve_json, zones_json, image_filename, doc_no)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 company_id, agg_type, source, fm,
                 json.dumps(sieve_data),
                 json.dumps(zones_data),
-                image_filename
+                image_filename, doc_no
             ))
             row = cur.fetchone()
         conn.commit()
-    return row[0]
+    return row[0], doc_no
 
 def get_analyses(company_id: int, limit: int = 100,
                  agg_type: str = None, date_from: str = None, date_to: str = None):
@@ -142,7 +159,7 @@ def get_analyses(company_id: int, limit: int = 100,
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
-                SELECT id, analyzed_at, agg_type, source, fm, sieve_json, zones_json, image_filename
+                SELECT id, analyzed_at, agg_type, source, fm, sieve_json, zones_json, image_filename, doc_no
                 FROM analyses
                 WHERE {where}
                 ORDER BY analyzed_at DESC
@@ -187,7 +204,7 @@ def update_analysis_source(analysis_id: int, company_id: int, source: str) -> bo
 def update_analysis(analysis_id: int, company_id: int, agg_type: str, source: str,
                     fm: float, sieve_data: list, zones_data: list,
                     image_filename: str = None) -> bool:
-    """อัพเดตผลวิเคราะห์ทั้งหมด (re-analyze) คืน True ถ้าสำเร็จ"""
+    """อัพเดตผลวิเคราะห์ทั้งหมด (re-analyze) คืน True ถ้าสำเร็จ (doc_no คงเดิม)"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
