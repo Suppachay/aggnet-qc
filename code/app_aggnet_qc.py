@@ -1257,6 +1257,10 @@ HISTORY_PAGE = """<!DOCTYPE html>
               <td><input type="number" step="0.01" min="0" max="100" id="lp6" class="lab-inp" placeholder="0"></td></tr>
         </tbody>
       </table>
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px">
+        <label style="font-size:.85rem;color:#4a5568;font-weight:600;white-space:nowrap">น้ำหนักรวม (g)</label>
+        <input type="number" step="0.01" min="0" id="labelWeightTotal" class="lab-inp" style="max-width:160px" placeholder="เช่น 500.00">
+      </div>
       <div id="labelStatus" style="font-size:.85rem;color:#718096;min-height:18px;margin-bottom:8px"></div>
       <div class="modal-footer">
         <button class="btn-cancel" onclick="closeModal('labelModal')">ยกเลิก</button>
@@ -1393,6 +1397,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
         const pi = document.getElementById('lp' + i);
         if (pi) pi.value = '';
       }
+      document.getElementById('labelWeightTotal').value = '';
       document.getElementById('labelStatus').textContent = '';
       document.getElementById('labelSaveBtn').disabled = false;
       document.getElementById('labelSaveBtn').textContent = '💾 บันทึก Label';
@@ -1402,9 +1407,10 @@ HISTORY_PAGE = """<!DOCTYPE html>
     async function saveLabel() {
       const id = document.getElementById('labelId').value;
       const sieves = ['1"','3/4"','1/2"','3/8"','#4','#8','Pan'];
-      const data = { sieves: [] };
+      const wt = parseFloat(document.getElementById('labelWeightTotal').value);
+      const data = { sieves: [], weight_total_g: isNaN(wt) ? null : wt };
       for (let i = 0; i <= 6; i++) {
-        const p = parseFloat(document.getElementById('lp' + i).value);
+        const p = parseFloat(parseFloat(document.getElementById('lp' + i).value).toFixed(2));
         data.sieves.push({
           sieve: sieves[i],
           passing: isNaN(p) ? null : p
