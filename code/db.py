@@ -56,6 +56,13 @@ ALTER TABLE analyses ADD COLUMN IF NOT EXISTS tested_date DATE;
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS tested_time VARCHAR(20);
 ALTER TABLE analyses ADD COLUMN IF NOT EXISTS label_json JSONB;
 
+CREATE TABLE IF NOT EXISTS doc_no_seq (
+    company_id  INTEGER NOT NULL,
+    year        INTEGER NOT NULL,
+    last_seq    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (company_id, year)
+);
+
 CREATE INDEX IF NOT EXISTS idx_analyses_company ON analyses(company_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_date    ON analyses(analyzed_at DESC);
 """
@@ -70,19 +77,23 @@ def init_db():
 
 # ── Companies ────────────────────────────────────────────────────────────────
 def generate_doc_no(company_id: int) -> str:
-    """สร้างเลขที่เอกสาร {YEAR}-{SEQ:04d} เช่น 2026-0001 (ใช้ MAX ไม่ใช่ COUNT เพื่อป้องกันเลขซ้ำเมื่อลบ)"""
+    """สร้างเลขที่เอกสาร {YEAR}-{SEQ:04d} เช่น 2026-0001
+    ใช้ตาราง doc_no_seq เพื่อให้เลขไม่ซ้ำแม้จะลบ record ออกไปแล้ว"""
     import datetime as _dt
     year = _dt.datetime.now().year
-    prefix = f"{year}-"
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT MAX(CAST(SUBSTRING(doc_no FROM %s) AS INTEGER)) "
-                "FROM analyses WHERE company_id=%s AND doc_no LIKE %s",
-                (len(prefix) + 1, company_id, prefix + '%')
-            )
-            max_seq = cur.fetchone()[0]
-    next_seq = (max_seq or 0) + 1
+            # UPSERT: ถ้ายังไม่มี row → สร้างใหม่ด้วย last_seq=0
+            # จากนั้น increment แล้วคืนค่าใหม่ (atomic)
+            cur.execute("""
+                INSERT INTO doc_no_seq (company_id, year, last_seq)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (company_id, year)
+                DO UPDATE SET last_seq = doc_no_seq.last_seq + 1
+                RETURNING last_seq
+            """, (company_id, year))
+            next_seq = cur.fetchone()[0]
+        conn.commit()
     return f"{year}-{next_seq:04d}"
 
 def create_company(name: str, username: str, password: str) -> int:
