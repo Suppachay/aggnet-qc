@@ -37,7 +37,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                 Paragraph, Spacer, Image as RLImage, HRFlowable)
+                                 Paragraph, Spacer, Image as RLImage, HRFlowable, PageBreak)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.pdfbase import pdfmetrics
@@ -500,7 +500,11 @@ def generate_pdf(pred_6, source, agg_type, tested_date, tested_time, chart_buf, 
 
     # ── Sample Image ──
     if image_path and os.path.exists(image_path):
-        story.append(Spacer(1, 4*mm))
+        # หิน 3/4" มีตาราง Production Ratio ด้วย → ขึ้นหน้าใหม่
+        if '3_4' in agg_type:
+            story.append(PageBreak())
+        else:
+            story.append(Spacer(1, 4*mm))
         story.append(Paragraph('<b>ภาพตัวอย่างหิน (Sample Image)</b>',
                                 ParagraphStyle('img_hd', fontSize=9, fontName=_THAI_FONT)))
         story.append(Spacer(1, 2*mm))
@@ -1233,38 +1237,26 @@ HISTORY_PAGE = """<!DOCTYPE html>
         <thead>
           <tr style="background:#2b6cb0;color:#fff">
             <th style="padding:7px 10px;text-align:left">ตะแกรง</th>
-            <th style="padding:7px 10px;text-align:center">น้ำหนักค้าง (g)</th>
             <th style="padding:7px 10px;text-align:center">%ผ่าน</th>
           </tr>
         </thead>
         <tbody id="labelSieveTbody">
           <tr><td style="padding:6px 10px">1"</td>
-              <td><input type="number" step="0.01" min="0" id="lw0" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp0" class="lab-inp" placeholder="100"></td></tr>
           <tr><td style="padding:6px 10px">3/4"</td>
-              <td><input type="number" step="0.01" min="0" id="lw1" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp1" class="lab-inp" placeholder=""></td></tr>
           <tr><td style="padding:6px 10px">1/2"</td>
-              <td><input type="number" step="0.01" min="0" id="lw2" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp2" class="lab-inp" placeholder=""></td></tr>
           <tr><td style="padding:6px 10px">3/8"</td>
-              <td><input type="number" step="0.01" min="0" id="lw3" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp3" class="lab-inp" placeholder=""></td></tr>
           <tr><td style="padding:6px 10px">#4</td>
-              <td><input type="number" step="0.01" min="0" id="lw4" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp4" class="lab-inp" placeholder=""></td></tr>
           <tr><td style="padding:6px 10px">#8</td>
-              <td><input type="number" step="0.01" min="0" id="lw5" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp5" class="lab-inp" placeholder=""></td></tr>
           <tr><td style="padding:6px 10px">Pan</td>
-              <td><input type="number" step="0.01" min="0" id="lw6" class="lab-inp" placeholder="0"></td>
               <td><input type="number" step="0.01" min="0" max="100" id="lp6" class="lab-inp" placeholder="0"></td></tr>
         </tbody>
       </table>
-      <div style="margin-bottom:12px">
-        <label style="font-size:.85rem;color:#4a5568;font-weight:600">น้ำหนักรวม (g)</label>
-        <input type="number" step="0.01" min="0" id="labelWeightTotal" class="lab-inp" style="width:100%;margin-top:4px" placeholder="เช่น 500.00">
-      </div>
       <div id="labelStatus" style="font-size:.85rem;color:#718096;min-height:18px;margin-bottom:8px"></div>
       <div class="modal-footer">
         <button class="btn-cancel" onclick="closeModal('labelModal')">ยกเลิก</button>
@@ -1398,12 +1390,9 @@ HISTORY_PAGE = """<!DOCTYPE html>
       document.getElementById('labelDocNo').textContent = docNo || '-';
       // ล้างค่าเดิม
       for (let i = 0; i <= 6; i++) {
-        const wi = document.getElementById('lw' + i);
         const pi = document.getElementById('lp' + i);
-        if (wi) wi.value = '';
         if (pi) pi.value = '';
       }
-      document.getElementById('labelWeightTotal').value = '';
       document.getElementById('labelStatus').textContent = '';
       document.getElementById('labelSaveBtn').disabled = false;
       document.getElementById('labelSaveBtn').textContent = '💾 บันทึก Label';
@@ -1413,13 +1402,11 @@ HISTORY_PAGE = """<!DOCTYPE html>
     async function saveLabel() {
       const id = document.getElementById('labelId').value;
       const sieves = ['1"','3/4"','1/2"','3/8"','#4','#8','Pan'];
-      const data = { sieves: [], weight_total_g: parseFloat(document.getElementById('labelWeightTotal').value) || null };
+      const data = { sieves: [] };
       for (let i = 0; i <= 6; i++) {
-        const w = parseFloat(document.getElementById('lw' + i).value);
         const p = parseFloat(document.getElementById('lp' + i).value);
         data.sieves.push({
           sieve: sieves[i],
-          weight_g: isNaN(w) ? null : w,
           passing: isNaN(p) ? null : p
         });
       }
