@@ -237,12 +237,15 @@ Image naming: `sample_id=1` → `Sample_001.jpg`
 ```
 /workspace/AggNet/
 ├── code/
-│   ├── aggnet_dataset3.py       ← script หลัก (CBAM + Multi-Task, train_kfold(), splits.json)
-│   ├── make_splits.py           ← สร้าง splits.json ใหม่ (รันเมื่อ dataset เปลี่ยนขนาด)
-│   ├── validate_dataset.py      ← QC labels.csv (missing values, duplicate label, missing image ฯลฯ)
-│   ├── aggnet_single_image.py   ← script เก่า (single-image)
-│   ├── aggnet_multiview.py      ← script เก่า (multi-view)
-│   └── app_aggnet_qc.py         ← Web App Flask (port 5000) — ใช้ CBAM+MT model
+│   ├── aggnet_dataset3.py          ← script หลัก (CBAM + Multi-Task, train_kfold(), splits.json)
+│   ├── aggnet_dataset4.py          ← script dataset4 (path data/dataset4/, models/dataset4/)
+│   ├── make_splits.py              ← สร้าง splits.json ใหม่ (รันเมื่อ dataset เปลี่ยนขนาด)
+│   ├── validate_dataset.py         ← QC labels.csv (missing values, duplicate label, missing image ฯลฯ)
+│   ├── export_labels_from_db.py    ← ดึง label_json+ภาพจาก DB → labels.csv (สำหรับ retrain)
+│   ├── aggnet_single_image.py      ← script เก่า (single-image)
+│   ├── aggnet_multiview.py         ← script เก่า (multi-view)
+│   ├── app_aggnet_qc.py            ← Web App Flask (port 5000) — ใช้ CBAM+MT model
+│   └── db.py                       ← Database layer (Supabase PostgreSQL)
 ├── data/
 │   ├── dataset3/                ← 339 samples + labels.csv + splits.json (ปัจจุบัน) — ⚠️ ไม่ track ผ่าน git ยกเว้น splits.json
 │   ├── source_split/            ← images จัดเป็น Model_A/B/C × train/val/test
@@ -419,7 +422,7 @@ run("sleep 3 && tail -5 /workspace/AggNet/app.log")
 
 **เดิม (ชั่วคราว):** trycloudflare.com URL (ไม่ใช้แล้ว)
 
-### Web App (`app_aggnet_qc.py`) — สถานะปัจจุบัน (2026-10-22)
+### Web App (`app_aggnet_qc.py`) — สถานะปัจจุบัน (2026-10-23)
 
 **URL:** `https://app.aggnet-qc.com`
 **Port:** 5000 (Flask dev server)
@@ -428,24 +431,52 @@ run("sleep 3 && tail -5 /workspace/AggNet/app.log")
 
 **ฟีเจอร์ปัจจุบัน:**
 - วิเคราะห์ภาพหิน → Sieve Table + Gradation Chart + FM
-- ดาวน์โหลด PDF Report (Thai font Sarabun, เลขที่เอกสารมุมบนขวา)
-- หน้าประวัติ `/history`: ดูผล, PDF, แก้ไข/วิเคราะห์ใหม่, ลบ, Export CSV
-- ระบบเลขที่เอกสาร `doc_no` format `{YEAR}-{SEQ:04d}` (เช่น `2026-0001`)
+- ดาวน์โหลด PDF Report (Thai font Sarabun, เลขที่เอกสารมุมบนขวา, ภาพตัวอย่างหิน)
+  - หิน 3/4": ภาพขึ้นหน้าใหม่ (`PageBreak`); หิน 3/8": ต่อท้ายหน้าเดิม
+- หน้าประวัติ `/history`: ดูผล, PDF, แก้ไข/วิเคราะห์ใหม่ (มี date/time), ลบ, Export CSV
+- ระบบเลขที่เอกสาร `doc_no` format `{YEAR}-{SEQ:04d}` (เช่น `2026-0001`) — ใช้ MAX ไม่ซ้ำ
 - เวลา 12h AM/PM, Timezone Asia/Bangkok (UTC+7)
-- Sort หัวตาราง History (client-side JS)
-- Filter ประวัติตามวันที่ (ใช้ `tested_date` ที่ user เลือก ไม่ใช่ `analyzed_at`)
+- Sort หัวตาราง History (client-side JS, toggle asc/desc)
+- Filter ประวัติตามวันที่ (`COALESCE(tested_date, analyzed_at::date)`)
+- Export CSV: มี DocNo, ใช้ tested_date/tested_time
+- รูปภาพบันทึกลงดิสก์: `uploads/{company_id}/{doc_no}.jpg`
+- **📊 Lab Label**: ปุ่มท้ายแต่ละแถว → modal กรอก %ผ่านจริงจาก lab → บันทึก `label_json` ใน DB
+- **FM Formula**: 3/4" ไม่รวม Pan; 3/8" รวม Pan (แทน #16)
 
 **DB Schema — ตาราง analyses:**
 ```sql
 id, company_id, analyzed_at (TIMESTAMPTZ), agg_type, source, fm,
 sieve_json (JSONB), zones_json (JSONB), image_filename,
-doc_no VARCHAR(50), tested_date DATE, tested_time VARCHAR(20)
+doc_no VARCHAR(50), tested_date DATE, tested_time VARCHAR(20),
+label_json JSONB
+```
+
+**Routes:**
+```
+GET  /history                    — หน้าประวัติ
+GET  /history/<id>/detail        — JSON ผลวิเคราะห์
+GET  /history/<id>/pdf           — ดาวน์โหลด PDF
+POST /history/<id>/reanalyze     — วิเคราะห์ใหม่ด้วยภาพใหม่
+POST /history/<id>/delete        — ลบ record
+POST /history/<id>/label         — บันทึก lab label (label_json)
+GET  /export                     — Export CSV
 ```
 
 **Helper functions สำคัญ:**
 - `to_12h(time_str)` — แปลง HH:MM → 12:15 PM
-- `generate_doc_no(company_id)` — นับ COUNT ปีปัจจุบัน → `2026-0001`
+- `generate_doc_no(company_id)` — ใช้ MAX ของ seq ปีปัจจุบัน → `2026-0001`
+- `save_image_file(image_file, company_id, doc_no)` — บันทึกภาพลงดิสก์
+- `get_image_path(company_id, doc_no)` — หา path ภาพจาก doc_no
 - `get_conn()` — SET TIME ZONE 'Asia/Bangkok' ทุก connection
+- `save_label(analysis_id, company_id, label_data)` — บันทึก label_json ลง DB
+
+**Workflow Retrain โมเดลจาก Lab Label:**
+```bash
+python code/export_labels_from_db.py   # export label+ภาพจาก DB → labels.csv
+python code/make_splits.py             # สร้าง splits.json ใหม่
+python code/aggnet_dataset4.py         # fine-tune โมเดล
+# restart Flask → โมเดลใหม่ใช้งานได้ทันที
+```
 
 ### Package ที่ต้องติดตั้งเพิ่มบน environment ใหม่ (ไม่มีติดมากับ image)
 ```
@@ -477,6 +508,10 @@ apt-get update && apt-get install -y p7zip-full   # ถ้าต้องแต�
 - [x] ~~Sort ที่หัวตาราง history~~ — client-side JS, toggle asc/desc (2026-10-22)
 - [x] ~~บันทึก tested_date/tested_time ลง DB~~ — filter ใช้ COALESCE(tested_date, analyzed_at::date) (2026-10-22)
 - [x] ~~Cloudflare Named Tunnel (URL ถาวร)~~ — `app.aggnet-qc.com` (2026-10-22)
+- [x] ~~CSV Export: DocNo + date/time ถูกต้อง~~ (2026-10-23)
+- [x] ~~รูปภาพใน PDF~~ — uploads/{company_id}/{doc_no}.jpg, PageBreak 3/4" (2026-10-23)
+- [x] ~~Lab Label button~~ — modal %ผ่าน+น้ำหนัก, label_json, export_labels_from_db.py (2026-10-23)
+- [x] ~~FM formula fix (3/4" ไม่รวม Pan)~~ (2026-10-23)
 - [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว
 - [x] ~~k-fold cross-validation~~ — implement แล้ว 2026-08-15 (`train_kfold()`)
 - [x] ~~เพิ่มข้อมูล 339 → 469 samples (dataset4)~~ — dataset4 พร้อมแล้ว, Run 11 กำลังรัน

@@ -1205,3 +1205,79 @@ Pool: 123 samples | Test (held out): 12
 | `git commit` ล้มเหลว — HEAD.lock | Sandbox sandbox sandbox ขัดกัน | `Remove-Item ".git\HEAD.lock"` ใน PowerShell ก่อน commit |
 | วันที่ใน history ผิด (21 → 22) | `analyzed_at = NOW()` ไม่ใช่วันที่ที่ user เลือก | เพิ่ม `tested_date`/`tested_time` column บันทึกจากฟอร์ม |
 | Filter วันที่ 21 ไม่เจอ record | Filter ใช้ `analyzed_at` แต่ record มี `tested_date=21, analyzed_at=22` | เปลี่ยน WHERE เป็น `COALESCE(tested_date, analyzed_at::date)` |
+
+---
+
+## Session 9 — 2026-10-23 (CSV Fix, Image in PDF, Lab Label, Dataset Training Workflow)
+
+### สรุปการเปลี่ยนแปลงทั้งหมด
+
+#### 1. CSV Export Fix
+- เพิ่มคอลัมน์ `DocNo` เป็นคอลัมน์แรก
+- วันที่/เวลาใช้ `tested_date`/`tested_time` (ตรงกับหน้าเว็บ) แทน `analyzed_at`
+- fallback กลับ `analyzed_at` ถ้า `tested_date` เป็น NULL
+
+#### 2. รูปภาพใน PDF (Sample Image)
+- บันทึกไฟล์ภาพลงดิสก์ชื่อตาม `doc_no`: `uploads/{company_id}/{doc_no}.jpg`
+- ฟังก์ชัน `save_image_file(image_file, company_id, doc_no)` และ `get_image_path(company_id, doc_no)`
+- PDF แสดงหัว "ภาพตัวอย่างหิน (Sample Image)" พร้อมรูปภาพ 80×60 mm
+- **หิน 3/4":** ภาพขึ้นหน้าใหม่ (`PageBreak`) เพราะ content หน้าแรกเต็มจาก Production Ratio table
+- **หิน 3/8":** ภาพต่อท้ายหน้าเดิม (`Spacer`)
+
+#### 3. ปุ่ม 📊 Lab Label
+- ปุ่ม `📊 Lab` สีม่วง ท้ายทุก row ในตาราง History
+- Modal "บันทึก Lab Label (Sieve จริง)":
+  - แสดงเลขที่เอกสาร
+  - กรอก `%ผ่าน` (ทศนิยม 2 ตำแหน่ง) ทั้ง 7 ตะแกรง (1", 3/4", 1/2", 3/8", #4, #8, Pan)
+  - กรอก `น้ำหนักรวม (g)`
+- บันทึกลง `label_json` (JSONB) ใน DB ผ่าน route `POST /history/<id>/label`
+- DB: `save_label(analysis_id, company_id, label_data)` ใน db.py
+
+#### 4. Script Export ข้อมูลสำหรับ Retrain
+- **`code/export_labels_from_db.py`** — ดึง record ที่มี `label_json` จาก DB
+  - จับคู่กับรูปภาพจาก `uploads/{company_id}/{doc_no}.jpg`
+  - copy รูปภาพไป `data/dataset3/Sample_XXX.jpg`
+  - append แถวใหม่เข้า `data/dataset3/labels.csv` (ตรวจ `doc_no` ไม่ให้ซ้ำ รันซ้ำได้ปลอดภัย)
+- **Workflow Retrain:**
+  ```bash
+  python code/export_labels_from_db.py   # export label+ภาพจาก DB
+  python code/make_splits.py             # สร้าง splits.json ใหม่
+  python code/aggnet_dataset4.py         # fine-tune โมเดล
+  # restart Flask → โมเดลใหม่ใช้งานได้ทันที
+  ```
+
+#### 5. FM Formula Fix (หิน 3/4")
+- **Bug:** สูตร FM ของหิน 3/4" รวม Pan เข้าไปด้วย → ค่า FM สูงเกิน
+- **Fix:** 3/4" ไม่รวม Pan, 3/8" รวม Pan เป็นตัวแทน #16 sieve
+  ```python
+  if '3_8' in agg_type:
+      FM = sum(cu_ret[3/8", #4, #8, Pan]) / 100   # รวม Pan
+  else:
+      FM = sum(cu_ret[3/4", 1/2", 3/8", #4, #8]) / 100  # ไม่รวม Pan
+  ```
+
+#### 6. Re-analyze Modal — เพิ่มฟิลด์วันที่/เวลา
+- Edit modal มีช่อง `วันที่ทดสอบ` (date picker) และ `เวลาทดสอบ` (time picker)
+- JS แปลง `12:15 PM` → `13:15` สำหรับ `<input type="time">` อัตโนมัติ
+
+#### 7. doc_no Duplicate Fix (ลบแล้วสร้างใหม่)
+- เดิมใช้ `COUNT(*)` → ลบ record ออกแล้ว COUNT ลด → เลขซ้ำได้
+- เปลี่ยนเป็น `MAX(seq)` → เลขใหม่จะต่อจาก MAX เสมอ ไม่ซ้ำ
+- พฤติกรรม: ลบเลขสูงสุดแล้วสร้างใหม่ → ได้เลขเดิมกลับมา (ยอมรับได้ เพราะ record เดิมถูกลบแล้ว)
+
+---
+
+### ไฟล์ที่เปลี่ยน
+
+| ไฟล์ | การเปลี่ยนแปลง |
+|---|---|
+| `code/app_aggnet_qc.py` | save_image_file(), get_image_path(), generate_pdf(image_path), PageBreak สำหรับ 3/4", Lab button, label modal HTML+JS, /history/<id>/label route, FM formula fix, re-analyze modal date/time, CSV export (DocNo+date fix) |
+| `code/db.py` | INIT_SQL เพิ่ม `label_json JSONB`, `save_label()`, generate_doc_no() ใช้ MAX |
+| `code/export_labels_from_db.py` | สคริปต์ใหม่ — export label+ภาพจาก DB สำหรับ retrain |
+
+### ปัญหาที่เจอใน Session 9
+
+| ปัญหา | สาเหตุ | วิธีแก้ |
+|---|---|---|
+| `git commit` ล้มเหลว ทุก commit | HEAD.lock / index.lock ถูก lock โดย sandbox | `Remove-Item ".git\HEAD.lock"` และ `index.lock` จาก PowerShell ก่อนทุก commit |
+| ภาพใน PDF หิน 3/4" ทับกับ Production Ratio table | content หน้าแรกเต็ม | เพิ่ม `PageBreak()` ก่อนภาพเฉพาะ agg_type 3_4" |
