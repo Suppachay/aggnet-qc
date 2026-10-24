@@ -1281,3 +1281,67 @@ Pool: 123 samples | Test (held out): 12
 |---|---|---|
 | `git commit` ล้มเหลว ทุก commit | HEAD.lock / index.lock ถูก lock โดย sandbox | `Remove-Item ".git\HEAD.lock"` และ `index.lock` จาก PowerShell ก่อนทุก commit |
 | ภาพใน PDF หิน 3/4" ทับกับ Production Ratio table | content หน้าแรกเต็ม | เพิ่ม `PageBreak()` ก่อนภาพเฉพาะ agg_type 3_4" |
+
+---
+
+## Session 10 — 2026-10-24 (PDF Comparison Report AI vs Lab)
+
+### สรุปการเปลี่ยนแปลงทั้งหมด
+
+#### 1. PDF Comparison Report (`generate_compare_pdf`)
+
+ฟีเจอร์ใหม่: กดปุ่ม "📋 ผลวิเคราะห์" ใน history table → เปิด PDF ใน tab ใหม่ (เฉพาะ record ที่บันทึก Lab แล้ว)
+
+**โครงสร้าง PDF (1 หน้า A4):**
+- Header: เลขที่เอกสาร, วันที่, แหล่งหิน, ประเภทหิน, น้ำหนักตัวอย่าง
+- ตารางเปรียบเทียบ 5 คอลัมน์: ตะแกรง | AI Predict (%) | Lab จริง (%) | Diff (%) | สถานะ
+  - 6 ตะแกรง: 3/4", 1/2", 3/8", #4, #8, Pan (ตัด 1" ออก)
+  - Diff > 5% → แถวไฮไลท์สีแดง + "❌ เกิน 5%"
+- MAE Summary (compact 1 บรรทัด): `MAE = X.XX% → ดีมาก/พอใช้/ควรปรับปรุง | ตะแกรงผ่าน X/6`
+- Dual-line Gradation Chart (Matplotlib → PNG embed ใน PDF):
+  - เส้นน้ำเงิน = AI Predict, เส้นเขียว = Lab จริง, พื้นเทา = ASTM Range
+  - 3/4": 6 จุด (3/4"–Pan); 3/8": 5 จุด (1/2"–Pan)
+
+#### 2. `generate_compare_chart(ai_vals, lab_vals, agg_type, sieve_names)`
+
+- รับ list ความยาว = len(sieve_names)
+- Build lookup dict ก่อน แล้ว filter เฉพาะ `plot_sieves` ตาม agg_type
+- **3/4":** plot_sieves = ['3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan'] (6 จุด)
+- **3/8":** plot_sieves = ['1/2"', '3/8"', '#4', '#8', 'Pan'] (5 จุด) — ตัด 3/4" ออกเพราะ Model B ไม่ predict
+
+#### 3. Route และปุ่มใหม่
+
+| Route | Method | ฟังก์ชัน |
+|---|---|---|
+| `/history/<id>/compare_pdf` | GET | generate_compare_pdf → ส่ง PDF ใน tab ใหม่ |
+
+- ปุ่ม `.btn-compare` (สีเขียว) ท้ายทุก row — active เฉพาะ `has_label=true`, disabled (เทา) ถ้าไม่มี Lab
+- JS: `openComparePdf(id)` → `window.open('/history/'+id+'/compare_pdf', '_blank')`
+
+#### 4. Bug Fix: หิน 3/8" ทำให้ Internal Server Error
+
+**Root cause:** `generate_compare_chart` เดิมรับ 7 ค่า แล้วทำ `ai_pass[1:]` → 6 ค่า แต่ `x_labels` 3/8" มีแค่ 5 ตัว → matplotlib crash (array size mismatch)
+
+**Fix:** เปลี่ยนให้รับ `sieve_names` parameter แล้ว build lookup dict เอง → กรอง `plot_sieves` ที่ถูกต้องสำหรับแต่ละ agg_type ทำให้ len(x) = len(ai_y) = len(lab_y) = len(astm_c) เสมอ
+
+**สาเหตุเพิ่มเติม:** `sieve_json` ของ 3/4" มี 7 entries, ของ 3/8" มีแค่ 5 entries — โค้ดเดิมใช้ index-based access ทำให้ misalign — แก้เป็น lookup by sieve name (normalize `No.4→#4`, `No.8→#8`)
+
+#### 5. Layout ปรับให้จบ 1 หน้า A4
+- ลด Spacer ทุกจุด (3mm, 2mm, 1.5mm แทน 5mm)
+- ตัดส่วนอธิบาย MAE แบบ bullet ออก → เหลือแค่ MAE compact 1 บรรทัด
+- Chart: 170×85mm (ลดจาก 90mm)
+
+---
+
+### ไฟล์ที่เปลี่ยน
+
+| ไฟล์ | การเปลี่ยนแปลง |
+|---|---|
+| `code/app_aggnet_qc.py` | generate_compare_chart(), generate_compare_pdf(), /history/<id>/compare_pdf route, btn-compare + CSS, openComparePdf() JS |
+
+### ปัญหาที่เจอใน Session 10
+
+| ปัญหา | สาเหตุ | วิธีแก้ |
+|---|---|---|
+| หิน 3/8" → Internal Server Error | array size mismatch ใน matplotlib (6 vs 5) | rewrite generate_compare_chart รับ sieve_names, build lookup dict |
+| `git commit` ล้มเหลว | HEAD.lock จาก sandbox | `Remove-Item ".git\HEAD.lock"` ใน PowerShell |

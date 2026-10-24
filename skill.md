@@ -422,7 +422,7 @@ run("sleep 3 && tail -5 /workspace/AggNet/app.log")
 
 **เดิม (ชั่วคราว):** trycloudflare.com URL (ไม่ใช้แล้ว)
 
-### Web App (`app_aggnet_qc.py`) — สถานะปัจจุบัน (2026-10-23)
+### Web App (`app_aggnet_qc.py`) — สถานะปัจจุบัน (2026-10-24)
 
 **URL:** `https://app.aggnet-qc.com`
 **Port:** 5000 (Flask dev server)
@@ -441,7 +441,15 @@ run("sleep 3 && tail -5 /workspace/AggNet/app.log")
 - Export CSV: มี DocNo, ใช้ tested_date/tested_time
 - รูปภาพบันทึกลงดิสก์: `uploads/{company_id}/{doc_no}.jpg`
 - **📊 Lab Label**: ปุ่มท้ายแต่ละแถว → modal กรอก %ผ่านจริงจาก lab → บันทึก `label_json` ใน DB
+  - pre-fill ค่าเดิมเมื่อเปิด modal ซ้ำ (GET /history/<id>/label)
+  - คอลัมน์ "สถานะ" แสดง ✅ บันทึกผล Lab แล้ว / ⬜ ยังไม่บันทึกผล Lab
+  - Pagination 10/25/50/100 แถวต่อหน้า (localStorage)
 - **FM Formula**: 3/4" ไม่รวม Pan; 3/8" รวม Pan (แทน #16)
+- **📋 ผลวิเคราะห์**: ปุ่มท้ายแต่ละแถว (active เฉพาะ has_label=true) → PDF Comparison Report (1 หน้า A4)
+  - ตารางเปรียบเทียบ: 6 ตะแกรง (3/4"–Pan) | AI % | Lab % | Diff% | สถานะ — ไฮไลท์แดงถ้า Diff>5%
+  - MAE Summary (compact): `MAE = X.XX% → ดีมาก/พอใช้/ควรปรับปรุง | ตะแกรงผ่าน X/6`
+  - Dual-line Gradation Chart: AI (น้ำเงิน) vs Lab จริง (เขียว) บน ASTM range
+  - รองรับทั้ง 3/4" (6 จุด) และ 3/8" (5 จุด ตัด 3/4" ออก) — lookup by sieve name ไม่ใช่ index
 
 **DB Schema — ตาราง analyses:**
 ```sql
@@ -453,22 +461,37 @@ label_json JSONB
 
 **Routes:**
 ```
-GET  /history                    — หน้าประวัติ
-GET  /history/<id>/detail        — JSON ผลวิเคราะห์
-GET  /history/<id>/pdf           — ดาวน์โหลด PDF
-POST /history/<id>/reanalyze     — วิเคราะห์ใหม่ด้วยภาพใหม่
-POST /history/<id>/delete        — ลบ record
-POST /history/<id>/label         — บันทึก lab label (label_json)
-GET  /export                     — Export CSV
+GET      /history                    — หน้าประวัติ
+GET      /history/<id>/detail        — JSON ผลวิเคราะห์
+GET      /history/<id>/pdf           — ดาวน์โหลด PDF
+POST     /history/<id>/reanalyze     — วิเคราะห์ใหม่ด้วยภาพใหม่
+POST     /history/<id>/delete        — ลบ record
+GET/POST /history/<id>/label         — GET: ดึง label_json | POST: บันทึก lab label
+GET      /history/<id>/compare_pdf   — PDF Comparison Report (AI vs Lab)
+GET      /export                     — Export CSV
 ```
 
-**Helper functions สำคัญ:**
-- `to_12h(time_str)` — แปลง HH:MM → 12:15 PM
-- `generate_doc_no(company_id)` — ใช้ MAX ของ seq ปีปัจจุบัน → `2026-0001`
-- `save_image_file(image_file, company_id, doc_no)` — บันทึกภาพลงดิสก์
-- `get_image_path(company_id, doc_no)` — หา path ภาพจาก doc_no
+**Chart & PDF functions สำคัญ:**
+- `generate_chart(pred_6, source_name, agg_type)` — Single-line gradation chart
+- `generate_compare_chart(ai_vals, lab_vals, agg_type, sieve_names)` — Dual-line chart AI vs Lab
+  - รับ list ความยาว = len(sieve_names); build lookup dict แล้ว filter ตาม plot_sieves
+  - 3/4": plot_sieves=['3/4"','1/2"','3/8"','#4','#8','Pan'] (6 จุด)
+  - 3/8": plot_sieves=['1/2"','3/8"','#4','#8','Pan'] (5 จุด)
+- `generate_compare_pdf(row, sieve_json, label_json)` — PDF 1 หน้า A4
+  - COMPARE_SIEVES=['3/4"','1/2"','3/8"','#4','#8','Pan'] — lookup by name ทั้ง AI และ Lab
+  - None ถ้าไม่มีใน sieve_json (เช่น 3/4" สำหรับ 3/8" stone) → แสดง '-' ในตาราง
+- `generate_pdf(pred_6, source, agg_type, ...)` — PDF Report หลัก
+- `compute_sieve_table(pred_6)` — (passing[7], ind_retain[7], cu_retain[7])
+- `compute_fm(cu_ret_full, agg_type)` — FM formula
+- `to_12h(time_str)`, `generate_doc_no(company_id)`, `save_image_file()`, `get_image_path()`
 - `get_conn()` — SET TIME ZONE 'Asia/Bangkok' ทุก connection
 - `save_label(analysis_id, company_id, label_data)` — บันทึก label_json ลง DB
+
+**JS functions สำคัญ (history page):**
+- `openComparePdf(id)` — เปิด /history/<id>/compare_pdf ใน tab ใหม่
+- `openLabel(id, docNo)` — async fetch pre-fill + เปิด modal
+- `saveLabel()` — POST label_json, update badge in-place
+- `initPagination()`, `setPageSize(n)`, `renderPage()` — client-side pagination
 
 **Workflow Retrain โมเดลจาก Lab Label:**
 ```bash
@@ -512,6 +535,8 @@ apt-get update && apt-get install -y p7zip-full   # ถ้าต้องแต�
 - [x] ~~รูปภาพใน PDF~~ — uploads/{company_id}/{doc_no}.jpg, PageBreak 3/4" (2026-10-23)
 - [x] ~~Lab Label button~~ — modal %ผ่าน+น้ำหนัก, label_json, export_labels_from_db.py (2026-10-23)
 - [x] ~~FM formula fix (3/4" ไม่รวม Pan)~~ (2026-10-23)
+- [x] ~~PDF Comparison Report (AI vs Lab)~~ — dual-line chart, ตารางเปรียบเทียบ, MAE compact, fit 1 A4 page (2026-10-24)
+- [x] ~~ปุ่ม "📋 ผลวิเคราะห์" ใน history table~~ — active เฉพาะ has_label, lookup by sieve name รองรับทั้ง 3/4" และ 3/8" (2026-10-24)
 - [x] ~~รัน training ครั้งแรกบน RAILAB Marimo~~ — Run 09 เสร็จแล้ว
 - [x] ~~k-fold cross-validation~~ — implement แล้ว 2026-08-15 (`train_kfold()`)
 - [x] ~~เพิ่มข้อมูล 339 → 469 samples (dataset4)~~ — dataset4 พร้อมแล้ว, Run 11 กำลังรัน
