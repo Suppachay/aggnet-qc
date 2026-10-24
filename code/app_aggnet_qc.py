@@ -1180,6 +1180,23 @@ HISTORY_PAGE = """<!DOCTYPE html>
       {% endfor %}
     </tbody>
   </table>
+
+  <!-- Pagination bar -->
+  <div id="paginationBar" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px;font-size:.9rem;color:#4a5568">
+      แสดง
+      <select id="pageSizeSelect" onchange="setPageSize(parseInt(this.value))"
+              style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-family:inherit;font-size:.9rem">
+        <option value="10">10</option>
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+      แถวต่อหน้า &nbsp;|&nbsp; <span id="pageInfo">-</span>
+    </div>
+    <div style="display:flex;gap:4px" id="pageButtons"></div>
+  </div>
+
   {% else %}
   <div class="empty">ยังไม่มีประวัติการวิเคราะห์</div>
   {% endif %}
@@ -1289,8 +1306,79 @@ HISTORY_PAGE = """<!DOCTYPE html>
     #historyTable th.asc .sort-icon::after  { content:'▲'; }
     #historyTable th.desc .sort-icon::after { content:'▼'; }
     #historyTable th.asc  .sort-icon, #historyTable th.desc .sort-icon { opacity:1; }
+    .pg-btn { padding:5px 11px;border:1.5px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:.85rem;color:#2b6cb0;font-family:inherit }
+    .pg-btn:hover { background:#ebf8ff }
+    .pg-btn.active { background:#2b6cb0;color:#fff;border-color:#2b6cb0;font-weight:700 }
+    .pg-btn:disabled { opacity:.4;cursor:default }
   </style>
   <script>
+    // ── Pagination ──────────────────────────────────────────────────────────
+    let _pageSize = 10, _curPage = 1;
+    let _allRows = [];
+
+    function initPagination() {
+      const tbody = document.querySelector('#historyTable tbody');
+      if (!tbody) return;
+      _allRows = Array.from(tbody.querySelectorAll('tr'));
+      // restore saved page size
+      const saved = localStorage.getItem('aggnet_pageSize');
+      if (saved) {
+        _pageSize = parseInt(saved);
+        document.getElementById('pageSizeSelect').value = _pageSize;
+      }
+      _curPage = 1;
+      renderPage();
+    }
+
+    function setPageSize(n) {
+      _pageSize = n;
+      _curPage = 1;
+      localStorage.setItem('aggnet_pageSize', n);
+      renderPage();
+    }
+
+    function goPage(p) {
+      _curPage = p;
+      renderPage();
+    }
+
+    function renderPage() {
+      const rows = _allRows;  // หลัง sort _allRows อัพเดตแล้ว
+      const total = rows.length;
+      const totalPages = Math.max(1, Math.ceil(total / _pageSize));
+      if (_curPage > totalPages) _curPage = totalPages;
+      const start = (_curPage - 1) * _pageSize;
+      const end   = Math.min(start + _pageSize, total);
+      rows.forEach((tr, i) => {
+        tr.style.display = (i >= start && i < end) ? '' : 'none';
+      });
+      // pageInfo
+      document.getElementById('pageInfo').textContent =
+        total === 0 ? '0 รายการ' : `${start + 1}–${end} จาก ${total} รายการ`;
+      // page buttons
+      const bar = document.getElementById('pageButtons');
+      bar.innerHTML = '';
+      const addBtn = (label, page, disabled, active) => {
+        const b = document.createElement('button');
+        b.className = 'pg-btn' + (active ? ' active' : '');
+        b.textContent = label;
+        b.disabled = disabled;
+        if (!disabled) b.onclick = () => goPage(page);
+        bar.appendChild(b);
+      };
+      addBtn('‹', _curPage - 1, _curPage === 1, false);
+      // แสดงปุ่มหน้าไม่เกิน 7 ปุ่ม
+      let lo = Math.max(1, _curPage - 3), hi = Math.min(totalPages, lo + 6);
+      if (hi - lo < 6) lo = Math.max(1, hi - 6);
+      if (lo > 1) { addBtn('1', 1, false, false); if (lo > 2) bar.appendChild(Object.assign(document.createElement('span'), {textContent:'…', style:'padding:5px 4px;color:#718096;font-size:.85rem'})); }
+      for (let p = lo; p <= hi; p++) addBtn(p, p, false, p === _curPage);
+      if (hi < totalPages) { if (hi < totalPages - 1) bar.appendChild(Object.assign(document.createElement('span'), {textContent:'…', style:'padding:5px 4px;color:#718096;font-size:.85rem'})); addBtn(totalPages, totalPages, false, false); }
+      addBtn('›', _curPage + 1, _curPage === totalPages, false);
+    }
+
+    // init เมื่อโหลดหน้า
+    document.addEventListener('DOMContentLoaded', initPagination);
+
     let _sortCol = -1, _sortAsc = true;
     function sortTable(col) {
       const tbl = document.getElementById('historyTable');
@@ -1309,6 +1397,10 @@ HISTORY_PAGE = """<!DOCTYPE html>
         return _sortAsc ? cmp : -cmp;
       });
       rows.forEach(r => tbody.appendChild(r));
+      // sync _allRows หลัง sort แล้ว re-render pagination
+      _allRows = rows;
+      _curPage = 1;
+      renderPage();
     }
 
     function closeModal(id) {
