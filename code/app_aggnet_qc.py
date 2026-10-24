@@ -1389,19 +1389,35 @@ HISTORY_PAGE = """<!DOCTYPE html>
       } else { alert('ลบไม่สำเร็จ'); }
     }
 
-    function openLabel(id, docNo) {
+    async function openLabel(id, docNo) {
       document.getElementById('labelId').value = id;
       document.getElementById('labelDocNo').textContent = docNo || '-';
-      // ล้างค่าเดิม
+      document.getElementById('labelStatus').textContent = '';
+      document.getElementById('labelSaveBtn').disabled = false;
+      document.getElementById('labelSaveBtn').textContent = '💾 บันทึก Label';
+      // ล้างก่อน แล้วค่อย fetch
       for (let i = 0; i <= 6; i++) {
         const pi = document.getElementById('lp' + i);
         if (pi) pi.value = '';
       }
       document.getElementById('labelWeightTotal').value = '';
-      document.getElementById('labelStatus').textContent = '';
-      document.getElementById('labelSaveBtn').disabled = false;
-      document.getElementById('labelSaveBtn').textContent = '💾 บันทึก Label';
       document.getElementById('labelModal').classList.add('open');
+      // ดึงค่าที่บันทึกไว้ล่าสุด (ถ้ามี)
+      try {
+        const res = await fetch('/history/' + id + '/label');
+        if (res.ok) {
+          const d = await res.json();
+          if (d && d.sieves && d.sieves.length) {
+            d.sieves.forEach((s, i) => {
+              const pi = document.getElementById('lp' + i);
+              if (pi && s.passing != null) pi.value = s.passing;
+            });
+          }
+          if (d && d.weight_total_g != null) {
+            document.getElementById('labelWeightTotal').value = d.weight_total_g;
+          }
+        }
+      } catch(e) { /* ไม่มีค่าเดิม — ปล่อยว่างไว้ */ }
     }
 
     async function saveLabel() {
@@ -1606,13 +1622,25 @@ def history_delete(aid):
     ok = aggnet_db.delete_analysis(aid, session['company_id'])
     return ('', 200) if ok else ('Not found', 404)
 
-@app.route('/history/<int:aid>/label', methods=['POST'])
+@app.route('/history/<int:aid>/label', methods=['GET', 'POST'])
 def history_label(aid):
-    """บันทึก Lab Label (ค่า sieve จริงจาก lab) เพื่อใช้เป็น training data"""
+    """GET: ดึง label_json เดิม | POST: บันทึก lab label ใหม่"""
     if not session.get('company_id'):
         return jsonify({'error': 'unauthorized'}), 401
     if not DB_ENABLED:
         return jsonify({'error': 'db disabled'}), 503
+    if request.method == 'GET':
+        row = aggnet_db.get_analysis_by_id(aid, session['company_id'])
+        if not row:
+            return jsonify({'error': 'not found'}), 404
+        import json as _json
+        lj = row.get('label_json')
+        if lj is None:
+            return jsonify({}), 200
+        if isinstance(lj, str):
+            lj = _json.loads(lj)
+        return jsonify(lj)
+    # POST
     import json as _json
     label_data = request.get_json(force=True, silent=True)
     if not label_data:
