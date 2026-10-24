@@ -286,26 +286,36 @@ def generate_chart(pred_6, source_name="", agg_type='Aggregate 3_4inch'):
     return buf
 
 
-def generate_compare_chart(ai_pass, lab_pass, agg_type='Aggregate 3_4inch'):
-    """สร้าง Dual-Line Gradation Chart เปรียบเทียบ AI vs Lab"""
-    fig, ax = plt.subplots(figsize=(8, 5))
-    fig.patch.set_facecolor('white')
-
+def generate_compare_chart(ai_vals, lab_vals, agg_type='Aggregate 3_4inch',
+                           sieve_names=None):
+    """สร้าง Dual-Line Gradation Chart เปรียบเทียบ AI vs Lab
+    ai_vals / lab_vals : list ความยาวเท่ากับ sieve_names (None → skip)
+    sieve_names        : ['3/4"','1/2"','3/8"','#4','#8','Pan'] หรือ subset"""
+    # ── กำหนด sieve set ตาม agg_type ──────────────────────────────────────────
     if agg_type == 'Aggregate 3_8inch':
-        # 3/8": แสดงเฉพาะ 1/2" ถึง Pan (5 sieve)
-        x_labels = ['1/2"', '3/8"', 'No.4', 'No.8', 'Pan']
-        x = list(range(len(x_labels)))
+        # 3/8": ไม่มี 3/4" → แสดงเฉพาะ 1/2"–Pan
+        plot_sieves = ['1/2"', '3/8"', '#4', '#8', 'Pan']
         astm_c = [100, 85, 10, 0, 0]
         astm_f = [100, 100, 30, 10, 5]
-        ai_y  = ai_pass[1:]   # ตัด 1" ออก
-        lab_y = lab_pass[1:]
     else:
-        x_labels = ASTM_X_LABELS  # ['1"','3/4"','1/2"','3/8"','No.4','No.8','Pan']
-        x = list(range(7))
-        astm_c = ASTM_COARSE
-        astm_f = ASTM_FINE
-        ai_y  = ai_pass
-        lab_y = lab_pass
+        # 3/4": แสดง 3/4"–Pan (6 ตะแกรง)
+        plot_sieves = ['3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan']
+        astm_c = [90,  55,  20, 0, 0, 0]
+        astm_f = [100, 75,  55, 10, 5, 0]
+
+    # ── build lookup จาก input ─────────────────────────────────────────────────
+    if sieve_names is None:
+        sieve_names = ['3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan']
+    ai_map  = {k: v for k, v in zip(sieve_names, ai_vals)  if v is not None}
+    lab_map = {k: v for k, v in zip(sieve_names, lab_vals) if v is not None}
+
+    x = list(range(len(plot_sieves)))
+    ai_y  = [float(ai_map.get(s,  0) or 0) for s in plot_sieves]
+    lab_y = [float(lab_map.get(s, 0) or 0) for s in plot_sieves]
+
+    # ── plot ───────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.patch.set_facecolor('white')
 
     ax.fill_between(x, astm_c, astm_f, alpha=0.10, color='gray', label='ASTM Range')
     ax.plot(x, astm_c, 'k-^', linewidth=1.0, markersize=4, alpha=0.6)
@@ -314,7 +324,7 @@ def generate_compare_chart(ai_pass, lab_pass, agg_type='Aggregate 3_4inch'):
     ax.plot(x, lab_y, 'g-s',  linewidth=2.5, markersize=7, label='Lab จริง',  zorder=5)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=10)
+    ax.set_xticklabels(plot_sieves, fontsize=10)
     ax.set_yticks(range(0, 110, 10))
     ax.set_ylim(-5, 110)
     ax.set_xlabel('Sieve Size', fontsize=11)
@@ -377,11 +387,9 @@ def generate_compare_pdf(row, sieve_json, label_json):
     total_sieve = len(valid_diffs)
 
     # ── Chart ──────────────────────────────────────────────────────────────────
-    # ส่ง 7 ค่าให้ generate_compare_chart (1"=100 + 6 ตะแกรง)
     agg_type_str = row.get('agg_type', '')
-    ai_7  = [100.0] + [ai_map.get(n, 0.0)  or 0.0 for n in COMPARE_SIEVES]
-    lab_7 = [100.0] + [lab_map.get(n, 0.0) or 0.0 for n in COMPARE_SIEVES]
-    chart_buf = generate_compare_chart(ai_7, lab_7, agg_type_str)
+    chart_buf = generate_compare_chart(
+        ai_pass, lab_pass, agg_type_str, sieve_names=COMPARE_SIEVES)
 
     # ── PDF setup ──────────────────────────────────────────────────────────────
     buf = io.BytesIO()
