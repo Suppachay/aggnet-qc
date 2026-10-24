@@ -340,21 +340,35 @@ def generate_compare_pdf(row, sieve_json, label_json):
     if isinstance(sieve_json, str): sieve_json = _json.loads(sieve_json)
     if isinstance(label_json, str): label_json = _json.loads(label_json)
 
-    sieve_names = ['1"', '3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan']
-    SIEVE_LABEL_MAP = {'1"':0,'3/4"':1,'1/2"':2,'3/8"':3,'#4':4,'#8':5,'Pan':6}
+    # ตะแกรงที่ใช้เปรียบเทียบ (ทั้ง 3/4" และ 3/8")
+    COMPARE_SIEVES = ['3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan']
 
-    # AI %pass จาก sieve_json (7 ค่า: 1"=100 + 6 ค่าที่ predict)
-    ai_pass = [s['passing'] for s in sieve_json]   # 7 ค่า
-    # Lab %pass จาก label_json
-    lab_map = {s['sieve']: s['passing'] for s in label_json.get('sieves', [])
-               if s.get('passing') is not None}
-    lab_pass = [lab_map.get(name) for name in sieve_names]  # None ถ้าไม่มี
+    # Build lookup dict from sieve_json by sieve name
+    # sieve_json อาจมี key 'sieve' หรือ 'name' ขึ้นกับ version
+    ai_map = {}
+    for s in sieve_json:
+        key = s.get('sieve') or s.get('name') or ''
+        # normalize: No.4→#4, No.8→#8, 'No4'→#4 etc.
+        key = key.replace('No.4','#4').replace('No.8','#8').replace('No4','#4').replace('No8','#8')
+        if key and s.get('passing') is not None:
+            ai_map[key] = float(s['passing'])
+
+    # Build lookup dict from label_json
+    lab_map = {}
+    for s in label_json.get('sieves', []):
+        key = (s.get('sieve') or '').replace('No.4','#4').replace('No.8','#8')
+        if key and s.get('passing') is not None:
+            lab_map[key] = float(s['passing'])
+
+    # สร้าง list ตาม COMPARE_SIEVES
+    ai_pass  = [ai_map.get(n)  for n in COMPARE_SIEVES]   # None ถ้าไม่มีใน sieve_json
+    lab_pass = [lab_map.get(n) for n in COMPARE_SIEVES]   # None ถ้าไม่กรอก
 
     # ── Diff & MAE ──────────────────────────────────────────────────────────────
     diffs = []
     for ai, lab in zip(ai_pass, lab_pass):
-        if lab is not None and ai is not None:
-            diffs.append(abs(float(ai) - float(lab)))
+        if ai is not None and lab is not None:
+            diffs.append(abs(ai - lab))
         else:
             diffs.append(None)
     valid_diffs = [d for d in diffs if d is not None]
@@ -363,9 +377,11 @@ def generate_compare_pdf(row, sieve_json, label_json):
     total_sieve = len(valid_diffs)
 
     # ── Chart ──────────────────────────────────────────────────────────────────
-    lab_full = [float(lab_map.get(n, 0)) if lab_map.get(n) is not None else 0.0
-                for n in sieve_names]
-    chart_buf = generate_compare_chart(ai_pass, lab_full, row.get('agg_type',''))
+    # ส่ง 7 ค่าให้ generate_compare_chart (1"=100 + 6 ตะแกรง)
+    agg_type_str = row.get('agg_type', '')
+    ai_7  = [100.0] + [ai_map.get(n, 0.0)  or 0.0 for n in COMPARE_SIEVES]
+    lab_7 = [100.0] + [lab_map.get(n, 0.0) or 0.0 for n in COMPARE_SIEVES]
+    chart_buf = generate_compare_chart(ai_7, lab_7, agg_type_str)
 
     # ── PDF setup ──────────────────────────────────────────────────────────────
     buf = io.BytesIO()
@@ -422,7 +438,7 @@ def generate_compare_pdf(row, sieve_json, label_json):
         Paragraph('<b>สถานะ</b>', s_body),
     ]]
     row_styles = []
-    for i, name in enumerate(sieve_names):
+    for i, name in enumerate(COMPARE_SIEVES):
         ai  = ai_pass[i]
         lab = lab_pass[i]
         diff = diffs[i]
