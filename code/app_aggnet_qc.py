@@ -1143,6 +1143,7 @@ HISTORY_PAGE = """<!DOCTYPE html>
         <th onclick="sortTable(3)" style="cursor:pointer" title="เรียง">ประเภทหิน <span class="sort-icon">⇅</span></th>
         <th onclick="sortTable(4)" style="cursor:pointer" title="เรียง">แหล่ง <span class="sort-icon">⇅</span></th>
         <th onclick="sortTable(5)" style="cursor:pointer" title="เรียง">FM <span class="sort-icon">⇅</span></th>
+        <th>สถานะ Lab</th>
         <th>การจัดการ</th>
       </tr>
     </thead>
@@ -1159,6 +1160,13 @@ HISTORY_PAGE = """<!DOCTYPE html>
         </td>
         <td class="source-cell" data-id="{{ r.id }}">{{ r.source }}</td>
         <td><b>{{ '%.2f'|format(r.fm) }}</b></td>
+        <td>
+          {% if r.has_label %}
+            <span class="lab-status done">✅ บันทึกผล Lab แล้ว</span>
+          {% else %}
+            <span class="lab-status todo">⬜ ยังไม่บันทึกผล Lab</span>
+          {% endif %}
+        </td>
         <td>
           <div class="action-btns" onclick="event.stopPropagation()">
             <button class="btn-view" onclick="viewDetail({{ r.id }})">🔍 ดูผล</button>
@@ -1273,6 +1281,9 @@ HISTORY_PAGE = """<!DOCTYPE html>
     .lab-inp { width:100%;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-family:inherit;font-size:.9rem;text-align:right }
     .btn-lab  { background:#6b46c1;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.82rem;white-space:nowrap }
     .btn-lab:hover { background:#553c9a }
+    .lab-status { font-size:.78rem;font-weight:600;padding:3px 8px;border-radius:12px;white-space:nowrap }
+    .lab-status.done { background:#c6f6d5;color:#276749 }
+    .lab-status.todo { background:#fff3cd;color:#856404 }
     #historyTable th[onclick]:hover { background:#1a365d; }
     #historyTable th .sort-icon { opacity:0.5; font-size:.8em; }
     #historyTable th.asc .sort-icon::after  { content:'▲'; }
@@ -1442,6 +1453,18 @@ HISTORY_PAGE = """<!DOCTYPE html>
       btn.disabled = false; btn.textContent = '💾 บันทึก Label';
       if (res.ok) {
         document.getElementById('labelStatus').textContent = '✅ บันทึก Label สำเร็จ';
+        // อัพเดต badge สถานะในตารางทันที (ไม่ต้อง reload)
+        const rows = document.querySelectorAll('#historyTable tbody tr');
+        rows.forEach(tr => {
+          if (tr.querySelector('.btn-lab[onclick*="openLabel(' + id + ',"]') ||
+              tr.innerHTML.includes("openLabel(" + id + ",")) {
+            const badge = tr.querySelector('.lab-status');
+            if (badge) {
+              badge.className = 'lab-status done';
+              badge.textContent = '✅ บันทึกผล Lab แล้ว';
+            }
+          }
+        });
         setTimeout(() => closeModal('labelModal'), 1200);
       } else {
         document.getElementById('labelStatus').textContent = '❌ บันทึกไม่สำเร็จ';

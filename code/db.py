@@ -171,7 +171,8 @@ def get_analyses(company_id: int, limit: int = 100,
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"""
                 SELECT id, analyzed_at, agg_type, source, fm, sieve_json, zones_json,
-                       image_filename, doc_no, tested_date, tested_time
+                       image_filename, doc_no, tested_date, tested_time,
+                       (label_json IS NOT NULL) AS has_label
                 FROM analyses
                 WHERE {where}
                 ORDER BY analyzed_at DESC
