@@ -286,6 +286,234 @@ def generate_chart(pred_6, source_name="", agg_type='Aggregate 3_4inch'):
     return buf
 
 
+def generate_compare_chart(ai_pass, lab_pass, agg_type='Aggregate 3_4inch'):
+    """สร้าง Dual-Line Gradation Chart เปรียบเทียบ AI vs Lab"""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.patch.set_facecolor('white')
+
+    if agg_type == 'Aggregate 3_8inch':
+        # 3/8": แสดงเฉพาะ 1/2" ถึง Pan (5 sieve)
+        x_labels = ['1/2"', '3/8"', 'No.4', 'No.8', 'Pan']
+        x = list(range(len(x_labels)))
+        astm_c = [100, 85, 10, 0, 0]
+        astm_f = [100, 100, 30, 10, 5]
+        ai_y  = ai_pass[1:]   # ตัด 1" ออก
+        lab_y = lab_pass[1:]
+    else:
+        x_labels = ASTM_X_LABELS  # ['1"','3/4"','1/2"','3/8"','No.4','No.8','Pan']
+        x = list(range(7))
+        astm_c = ASTM_COARSE
+        astm_f = ASTM_FINE
+        ai_y  = ai_pass
+        lab_y = lab_pass
+
+    ax.fill_between(x, astm_c, astm_f, alpha=0.10, color='gray', label='ASTM Range')
+    ax.plot(x, astm_c, 'k-^', linewidth=1.0, markersize=4, alpha=0.6)
+    ax.plot(x, astm_f, 'k-v', linewidth=1.0, markersize=4, alpha=0.6)
+    ax.plot(x, ai_y,  'b-o',  linewidth=2.5, markersize=7, label='AI Predict', zorder=5)
+    ax.plot(x, lab_y, 'g-s',  linewidth=2.5, markersize=7, label='Lab จริง',  zorder=5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, fontsize=10)
+    ax.set_yticks(range(0, 110, 10))
+    ax.set_ylim(-5, 110)
+    ax.set_xlabel('Sieve Size', fontsize=11)
+    ax.set_ylabel('% Passing', fontsize=11)
+    title = 'Gradation Curve — AI vs Lab' + (' (3/8")' if '3_8' in agg_type else ' (3/4")')
+    ax.set_title(title, fontsize=13, fontweight='bold')
+    ax.legend(fontsize=9, loc='upper right')
+    ax.grid(True, alpha=0.3)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    buf.seek(0)
+    return buf
+
+
+def generate_compare_pdf(row, sieve_json, label_json):
+    """สร้าง PDF เปรียบเทียบ AI vs Lab พร้อมตาราง, chart dual-line และ MAE summary"""
+    import json as _json
+    from reportlab.lib import colors as rl_colors
+
+    # ── parse ──────────────────────────────────────────────────────────────────
+    if isinstance(sieve_json, str): sieve_json = _json.loads(sieve_json)
+    if isinstance(label_json, str): label_json = _json.loads(label_json)
+
+    sieve_names = ['1"', '3/4"', '1/2"', '3/8"', '#4', '#8', 'Pan']
+    SIEVE_LABEL_MAP = {'1"':0,'3/4"':1,'1/2"':2,'3/8"':3,'#4':4,'#8':5,'Pan':6}
+
+    # AI %pass จาก sieve_json (7 ค่า: 1"=100 + 6 ค่าที่ predict)
+    ai_pass = [s['passing'] for s in sieve_json]   # 7 ค่า
+    # Lab %pass จาก label_json
+    lab_map = {s['sieve']: s['passing'] for s in label_json.get('sieves', [])
+               if s.get('passing') is not None}
+    lab_pass = [lab_map.get(name) for name in sieve_names]  # None ถ้าไม่มี
+
+    # ── Diff & MAE ──────────────────────────────────────────────────────────────
+    diffs = []
+    for ai, lab in zip(ai_pass, lab_pass):
+        if lab is not None and ai is not None:
+            diffs.append(abs(float(ai) - float(lab)))
+        else:
+            diffs.append(None)
+    valid_diffs = [d for d in diffs if d is not None]
+    mae = sum(valid_diffs) / len(valid_diffs) if valid_diffs else 0.0
+    pass_5 = sum(1 for d in valid_diffs if d <= 5.0)
+    total_sieve = len(valid_diffs)
+
+    # ── Chart ──────────────────────────────────────────────────────────────────
+    lab_full = [float(lab_map.get(n, 0)) if lab_map.get(n) is not None else 0.0
+                for n in sieve_names]
+    chart_buf = generate_compare_chart(ai_pass, lab_full, row.get('agg_type',''))
+
+    # ── PDF setup ──────────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            topMargin=15*mm, bottomMargin=15*mm,
+                            leftMargin=20*mm, rightMargin=20*mm)
+
+    s_title  = ParagraphStyle('t',  fontSize=14, fontName=_THAI_FONT, alignment=TA_CENTER, spaceAfter=4)
+    s_hdr    = ParagraphStyle('h',  fontSize=9,  fontName=_THAI_FONT)
+    s_body   = ParagraphStyle('b',  fontSize=8.5,fontName=_THAI_FONT)
+    s_small  = ParagraphStyle('sm', fontSize=8,  fontName=_THAI_FONT, textColor=rl_colors.grey)
+    s_note   = ParagraphStyle('n',  fontSize=8,  fontName=_THAI_FONT, leftIndent=8, spaceAfter=2)
+    s_warn   = ParagraphStyle('w',  fontSize=8,  fontName=_THAI_FONT, textColor=rl_colors.red, leftIndent=8)
+
+    doc_no      = row.get('doc_no') or ''
+    tested_date = str(row.get('tested_date') or '')
+    tested_time = row.get('tested_time') or ''
+    source      = row.get('source') or ''
+    agg_type    = row.get('agg_type') or ''
+    agg_label   = 'หิน 3/4"' if '3_4' in agg_type else 'หิน 3/8"'
+    weight_g    = label_json.get('weight_total_g')
+
+    story = []
+
+    # ── Header ─────────────────────────────────────────────────────────────────
+    story.append(Paragraph('<b>รายงานเปรียบเทียบผลการวิเคราะห์</b>', s_title))
+    story.append(Paragraph('<b>AI Prediction vs Lab Sieve Analysis</b>', s_title))
+    story.append(Spacer(1, 3*mm))
+    story.append(HRFlowable(width='100%', thickness=1, color=rl_colors.HexColor('#2b6cb0')))
+    story.append(Spacer(1, 3*mm))
+
+    meta = [
+        [Paragraph(f'<b>เลขที่เอกสาร:</b> {doc_no}', s_hdr),
+         Paragraph(f'<b>วันที่ทดสอบ:</b> {tested_date}  {tested_time}', s_hdr)],
+        [Paragraph(f'<b>แหล่งหิน:</b> {source}', s_hdr),
+         Paragraph(f'<b>ประเภทหิน:</b> {agg_label}', s_hdr)],
+    ]
+    if weight_g:
+        meta.append([Paragraph(f'<b>น้ำหนักตัวอย่าง:</b> {weight_g} g', s_hdr), Paragraph('', s_hdr)])
+    meta_tbl = Table(meta, colWidths=[85*mm, 85*mm])
+    meta_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'), ('ROWBACKGROUNDS',(0,0),(-1,-1),[rl_colors.white, rl_colors.Color(0.95,0.97,1)])]))
+    story.append(meta_tbl)
+    story.append(Spacer(1, 5*mm))
+
+    # ── Comparison Table ────────────────────────────────────────────────────────
+    story.append(Paragraph('<b>ตารางเปรียบเทียบ %Passing</b>', s_hdr))
+    story.append(Spacer(1, 2*mm))
+
+    tbl_data = [[
+        Paragraph('<b>ตะแกรง</b>', s_body),
+        Paragraph('<b>AI Predict (%)</b>', s_body),
+        Paragraph('<b>Lab จริง (%)</b>', s_body),
+        Paragraph('<b>Diff (%)</b>', s_body),
+        Paragraph('<b>สถานะ</b>', s_body),
+    ]]
+    row_styles = []
+    for i, name in enumerate(sieve_names):
+        ai  = ai_pass[i]
+        lab = lab_pass[i]
+        diff = diffs[i]
+        if lab is None:
+            tbl_data.append([
+                Paragraph(name, s_body),
+                Paragraph(f'{float(ai):.2f}' if ai is not None else '-', s_body),
+                Paragraph('-', s_body),
+                Paragraph('-', s_body),
+                Paragraph('ไม่มีข้อมูล', s_small),
+            ])
+        else:
+            ok = diff <= 5.0
+            status = '✅ ผ่าน' if ok else '❌ เกิน 5%'
+            if not ok:
+                row_styles.append(('BACKGROUND', (0, i+1), (-1, i+1), rl_colors.Color(1, 0.92, 0.92)))
+                row_styles.append(('TEXTCOLOR',  (3, i+1), (4, i+1),  rl_colors.red))
+            tbl_data.append([
+                Paragraph(f'<b>{name}</b>', s_body),
+                Paragraph(f'{float(ai):.2f}', s_body),
+                Paragraph(f'{float(lab):.2f}', s_body),
+                Paragraph(f'{diff:.2f}', s_body),
+                Paragraph(status, s_body),
+            ])
+
+    comp_tbl = Table(tbl_data, colWidths=[25*mm, 38*mm, 38*mm, 30*mm, 39*mm])
+    base_style = [
+        ('BACKGROUND', (0, 0), (-1, 0), rl_colors.HexColor('#2b6cb0')),
+        ('TEXTCOLOR',  (0, 0), (-1, 0), rl_colors.white),
+        ('ALIGN',      (1, 0), (-1, -1), 'CENTER'),
+        ('ALIGN',      (0, 0), (0, -1), 'CENTER'),
+        ('GRID',       (0, 0), (-1, -1), 0.5, rl_colors.grey),
+        ('FONTSIZE',   (0, 0), (-1, -1), 8.5),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, rl_colors.Color(0.95, 0.97, 1)]),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    comp_tbl.setStyle(TableStyle(base_style + row_styles))
+    story.append(comp_tbl)
+    story.append(Spacer(1, 5*mm))
+
+    # ── MAE Summary ────────────────────────────────────────────────────────────
+    story.append(HRFlowable(width='100%', thickness=0.5, color=rl_colors.grey))
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph('<b>สรุปความแม่นยำของ AI (MAE Summary)</b>', s_hdr))
+    story.append(Spacer(1, 2*mm))
+
+    mae_color = rl_colors.green if mae <= 5.0 else (rl_colors.orange if mae <= 10.0 else rl_colors.red)
+    mae_label = 'ดีมาก' if mae <= 5.0 else ('พอใช้' if mae <= 10.0 else 'ควรปรับปรุง')
+    story.append(Paragraph(f'<b>MAE (Mean Absolute Error) = {mae:.2f}%  →  {mae_label}</b>', s_hdr))
+    story.append(Spacer(1, 2*mm))
+
+    # คำอธิบาย MAE
+    story.append(Paragraph('• <b>MAE คืออะไร?</b>', s_note))
+    story.append(Paragraph(
+        'MAE (Mean Absolute Error) คือค่าเฉลี่ยของ |AI %Pass − Lab %Pass| ทุกตะแกรง '
+        'แสดงว่าโดยเฉลี่ยแล้ว AI ทำนายค่า %Passing ผิดพลาดกี่เปอร์เซ็นต์', s_note))
+    story.append(Spacer(1, 1*mm))
+    story.append(Paragraph('• <b>เกณฑ์การประเมิน:</b>', s_note))
+    story.append(Paragraph('  MAE ≤ 5%  → ✅ ดีมาก — AI ทำนายใกล้เคียงผล Lab มาก', s_note))
+    story.append(Paragraph('  MAE 5–10% → ⚠️ พอใช้ — ควรเก็บข้อมูลเพิ่มเพื่อ retrain', s_note))
+    story.append(Paragraph('  MAE > 10% → ❌ ควรปรับปรุง — แนะนำให้ retrain โมเดลด้วยข้อมูลชุดนี้', s_warn))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph(
+        f'• <b>ตะแกรงที่ผ่านเกณฑ์ (Diff ≤ 5%):</b>  {pass_5} / {total_sieve} ตะแกรง', s_note))
+    story.append(Spacer(1, 5*mm))
+
+    # ── Dual-Line Chart ─────────────────────────────────────────────────────────
+    story.append(HRFlowable(width='100%', thickness=0.5, color=rl_colors.grey))
+    story.append(Spacer(1, 3*mm))
+    story.append(Paragraph('<b>กราฟ Gradation Curve เปรียบเทียบ</b>', s_hdr))
+    story.append(Spacer(1, 2*mm))
+    story.append(RLImage(chart_buf, width=170*mm, height=90*mm))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph(
+        'เส้นสีน้ำเงิน = AI Predict  |  เส้นสีเขียว = Lab จริง  |  พื้นสีเทา = ASTM Range',
+        s_small))
+    story.append(Spacer(1, 5*mm))
+
+    # ── Footer ─────────────────────────────────────────────────────────────────
+    story.append(HRFlowable(width='100%', thickness=0.5, color=rl_colors.grey))
+    story.append(Paragraph(
+        f'QMS-FM-QA-03 : Rev 00 : 02/09/2021  |  AI Comparison Report  |  Generated by AggNet AI',
+        ParagraphStyle('ft', fontSize=7, alignment=TA_RIGHT, textColor=rl_colors.grey)))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
 # ─────────────────────────────────────────────
 # PDF REPORT GENERATION
 # ─────────────────────────────────────────────
@@ -1174,6 +1402,11 @@ HISTORY_PAGE = """<!DOCTYPE html>
             <button class="btn-edit" onclick="openEdit({{ r.id }}, '{{ r.source|replace("'", "\\'") }}', '{{ r.agg_type }}', '{% if r.tested_date %}{{ r.tested_date.strftime("%Y-%m-%d") }}{% endif %}', '{{ r.tested_time or "" }}')">✏️ แก้ไข</button>
             <button class="btn-del"  onclick="deleteRow({{ r.id }}, this)">🗑️ ลบ</button>
             <button class="btn-lab"  onclick="openLabel({{ r.id }}, '{{ r.doc_no or '' }}')">📊 Lab</button>
+            {% if r.has_label %}
+            <button class="btn-compare" onclick="openComparePdf({{ r.id }})">📋 ผลวิเคราะห์</button>
+            {% else %}
+            <button class="btn-compare" disabled title="กรอก Lab ก่อน">📋 ผลวิเคราะห์</button>
+            {% endif %}
           </div>
         </td>
       </tr>
@@ -1298,6 +1531,9 @@ HISTORY_PAGE = """<!DOCTYPE html>
     .lab-inp { width:100%;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-family:inherit;font-size:.9rem;text-align:right }
     .btn-lab  { background:#6b46c1;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.82rem;white-space:nowrap }
     .btn-lab:hover { background:#553c9a }
+    .btn-compare { background:#276749;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:.82rem;white-space:nowrap }
+    .btn-compare:hover:not([disabled]) { background:#1e4d35 }
+    .btn-compare[disabled] { background:#a0aec0;cursor:not-allowed }
     .lab-status { font-size:.78rem;font-weight:600;padding:3px 8px;border-radius:12px;white-space:nowrap }
     .lab-status.done { background:#c6f6d5;color:#276749 }
     .lab-status.todo { background:#fff3cd;color:#856404 }
@@ -1490,6 +1726,10 @@ HISTORY_PAGE = """<!DOCTYPE html>
       if (res.ok) {
         btn.closest('tr').remove();
       } else { alert('ลบไม่สำเร็จ'); }
+    }
+
+    function openComparePdf(id) {
+      window.open('/history/' + id + '/compare_pdf', '_blank');
     }
 
     async function openLabel(id, docNo) {
@@ -1762,6 +2002,33 @@ def history_label(aid):
         return jsonify({'error': 'invalid json'}), 400
     ok = aggnet_db.save_label(aid, session['company_id'], label_data)
     return ('', 200) if ok else ('Not found', 404)
+
+@app.route('/history/<int:aid>/compare_pdf')
+def history_compare_pdf(aid):
+    """สร้าง PDF เปรียบเทียบ AI vs Lab แล้วส่งกลับ"""
+    if not session.get('company_id'):
+        return redirect(url_for('login'))
+    if not DB_ENABLED:
+        return 'DB disabled', 503
+    import json as _json
+    row = aggnet_db.get_analysis_by_id(aid, session['company_id'])
+    if not row:
+        return 'Not found', 404
+    sj = row.get('sieve_json')
+    lj = row.get('label_json')
+    if not sj or not lj:
+        return 'ไม่มีข้อมูล Lab หรือ AI', 400
+    if isinstance(sj, str): sj = _json.loads(sj)
+    if isinstance(lj, str): lj = _json.loads(lj)
+    pdf_buf = generate_compare_pdf(dict(row), sj, lj)
+    doc_no = row.get('doc_no') or str(aid)
+    return send_file(
+        pdf_buf,
+        mimetype='application/pdf',
+        as_attachment=False,
+        download_name=f'Compare_{doc_no}.pdf'
+    )
+
 
 @app.route('/export')
 def export_csv():
