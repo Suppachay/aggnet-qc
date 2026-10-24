@@ -393,9 +393,9 @@ def generate_compare_pdf(row, sieve_json, label_json):
     # ── Header ─────────────────────────────────────────────────────────────────
     story.append(Paragraph('<b>รายงานเปรียบเทียบผลการวิเคราะห์</b>', s_title))
     story.append(Paragraph('<b>AI Prediction vs Lab Sieve Analysis</b>', s_title))
-    story.append(Spacer(1, 3*mm))
+    story.append(Spacer(1, 2*mm))
     story.append(HRFlowable(width='100%', thickness=1, color=rl_colors.HexColor('#2b6cb0')))
-    story.append(Spacer(1, 3*mm))
+    story.append(Spacer(1, 2*mm))
 
     meta = [
         [Paragraph(f'<b>เลขที่เอกสาร:</b> {doc_no}', s_hdr),
@@ -408,11 +408,11 @@ def generate_compare_pdf(row, sieve_json, label_json):
     meta_tbl = Table(meta, colWidths=[85*mm, 85*mm])
     meta_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'), ('ROWBACKGROUNDS',(0,0),(-1,-1),[rl_colors.white, rl_colors.Color(0.95,0.97,1)])]))
     story.append(meta_tbl)
-    story.append(Spacer(1, 5*mm))
+    story.append(Spacer(1, 3*mm))
 
     # ── Comparison Table ────────────────────────────────────────────────────────
     story.append(Paragraph('<b>ตารางเปรียบเทียบ %Passing</b>', s_hdr))
-    story.append(Spacer(1, 2*mm))
+    story.append(Spacer(1, 1.5*mm))
 
     tbl_data = [[
         Paragraph('<b>ตะแกรง</b>', s_body),
@@ -463,41 +463,27 @@ def generate_compare_pdf(row, sieve_json, label_json):
     ]
     comp_tbl.setStyle(TableStyle(base_style + row_styles))
     story.append(comp_tbl)
-    story.append(Spacer(1, 5*mm))
-
-    # ── MAE Summary ────────────────────────────────────────────────────────────
-    story.append(HRFlowable(width='100%', thickness=0.5, color=rl_colors.grey))
     story.append(Spacer(1, 3*mm))
+
+    # ── MAE Summary (compact) ──────────────────────────────────────────────────
+    story.append(HRFlowable(width='100%', thickness=0.5, color=rl_colors.grey))
+    story.append(Spacer(1, 2*mm))
     story.append(Paragraph('<b>สรุปความแม่นยำของ AI (MAE Summary)</b>', s_hdr))
-    story.append(Spacer(1, 2*mm))
+    story.append(Spacer(1, 1.5*mm))
 
-    mae_color = rl_colors.green if mae <= 5.0 else (rl_colors.orange if mae <= 10.0 else rl_colors.red)
     mae_label = 'ดีมาก' if mae <= 5.0 else ('พอใช้' if mae <= 10.0 else 'ควรปรับปรุง')
-    story.append(Paragraph(f'<b>MAE (Mean Absolute Error) = {mae:.2f}%  →  {mae_label}</b>', s_hdr))
-    story.append(Spacer(1, 2*mm))
-
-    # คำอธิบาย MAE
-    story.append(Paragraph('• <b>MAE คืออะไร?</b>', s_note))
     story.append(Paragraph(
-        'MAE (Mean Absolute Error) คือค่าเฉลี่ยของ |AI %Pass − Lab %Pass| ทุกตะแกรง '
-        'แสดงว่าโดยเฉลี่ยแล้ว AI ทำนายค่า %Passing ผิดพลาดกี่เปอร์เซ็นต์', s_note))
-    story.append(Spacer(1, 1*mm))
-    story.append(Paragraph('• <b>เกณฑ์การประเมิน:</b>', s_note))
-    story.append(Paragraph('  MAE ≤ 5%  → ✅ ดีมาก — AI ทำนายใกล้เคียงผล Lab มาก', s_note))
-    story.append(Paragraph('  MAE 5–10% → ⚠️ พอใช้ — ควรเก็บข้อมูลเพิ่มเพื่อ retrain', s_note))
-    story.append(Paragraph('  MAE > 10% → ❌ ควรปรับปรุง — แนะนำให้ retrain โมเดลด้วยข้อมูลชุดนี้', s_warn))
-    story.append(Spacer(1, 2*mm))
-    story.append(Paragraph(
-        f'• <b>ตะแกรงที่ผ่านเกณฑ์ (Diff ≤ 5%):</b>  {pass_5} / {total_sieve} ตะแกรง', s_note))
-    story.append(Spacer(1, 5*mm))
+        f'<b>MAE (Mean Absolute Error) = {mae:.2f}%  →  {mae_label}</b>  '
+        f'| ตะแกรงที่ผ่านเกณฑ์ (Diff ≤ 5%): {pass_5} / {total_sieve} ตะแกรง', s_hdr))
+    story.append(Spacer(1, 3*mm))
 
     # ── Dual-Line Chart ─────────────────────────────────────────────────────────
     story.append(HRFlowable(width='100%', thickness=0.5, color=rl_colors.grey))
-    story.append(Spacer(1, 3*mm))
+    story.append(Spacer(1, 2*mm))
     story.append(Paragraph('<b>กราฟ Gradation Curve เปรียบเทียบ</b>', s_hdr))
-    story.append(Spacer(1, 2*mm))
-    story.append(RLImage(chart_buf, width=170*mm, height=90*mm))
-    story.append(Spacer(1, 2*mm))
+    story.append(Spacer(1, 1.5*mm))
+    story.append(RLImage(chart_buf, width=170*mm, height=85*mm))
+    story.append(Spacer(1, 1.5*mm))
     story.append(Paragraph(
         'เส้นสีน้ำเงิน = AI Predict  |  เส้นสีเขียว = Lab จริง  |  พื้นสีเทา = ASTM Range',
         s_small))
